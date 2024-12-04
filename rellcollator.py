@@ -1,13 +1,11 @@
-import requests
 import sys
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
-from urllib import request
-import asyncio
-from qasync import QEventLoop
+from dns_client.adapters.requests import DNSClientSession
+from data_provider import DataProvider
 
-url = "https://api.themoviedb.org/3/discover/movie?"
+base_url = "https://api.themoviedb.org/3/!/movie?"
 headers = {
     "accept": "application/json",
     "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIxMjQ3YTcwYmZmYmYzZGZhMWQzNDAxMWEyOWE4ZjdkMyIsInN1YiI6IjY1ZWMwODhlOWQ4OTM5MDE2MjI5OTM4NCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.OxTkKEPFIGD_iIm522Tj18ERii7aE3Su9_Uc996u3yw"
@@ -104,7 +102,7 @@ class FilmCard(QVBoxLayout):
         title.setStyleSheet('font-size: 18pt;')
         title.setWordWrap(True)
         rating = QLabel(text=self.rating)
-        rating.setStyleSheet('font-size: 18pt; padding-left: 5px; padding-right: 5px; background-color: rgb(%s, %s, 0); border-radius: 5px; color: #fff' % (255 - int(float(self.rating)*25.5), int(float(self.rating)*25.5)))
+        rating.setStyleSheet('font-size: 18pt; padding-left: 5px; padding-right: 5px; background-color: rgb(%s, %s, 0); border-radius: 5px; color: #fff' % (255 - int(float(self.rating)*20), int(float(self.rating)*20)))
         poster.setPixmap(self.poster.scaled(500, 500, Qt.KeepAspectRatio))
         poster.setScaledContents(True)
         poster.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
@@ -126,7 +124,7 @@ class SearchWindow(QWidget):
         self.current_row_result = 0
         self.page_num = 1
         self.adult_inc = 'false'
-        self.lang = 'ru'
+        self.lang = 'ru-Ru'
         self.sort_param = 'popularity.desc'
         self.release_year = 'None'
         self.genres_ids = ''
@@ -206,10 +204,10 @@ class SearchWindow(QWidget):
         self.genres_edit = QLineEdit()
         completer = QCompleter([genre['name'].lower() for genre in genres])
         completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
-        completer.activated.connect(lambda: self.update_checked_genres(self.genres_edit.text()))
+        completer.activated.connect(lambda: self.__update_checked_genres(self.genres_edit.text()))
         self.genres_edit.setCompleter(completer)
         self.genres_edit.setPlaceholderText('название жанра')
-        self.genres_edit.returnPressed.connect(lambda: self.update_checked_genres(self.genres_edit.text()))
+        self.genres_edit.returnPressed.connect(lambda: self.__update_checked_genres(self.genres_edit.text()))
         self.genres_edit.setObjectName('genres-edit')
         self.genres_edit.setMaximumWidth(300)
         self.genres_edit.setAlignment(Qt.AlignVCenter)
@@ -236,7 +234,7 @@ class SearchWindow(QWidget):
         main_layout.setStretch(1, 3)
         self.setLayout(main_layout)
 
-    def update_checked_genres(self, text):
+    def __update_checked_genres(self, text):
         for genre in genres:
             if genre['name'].lower() == text.lower():
                 if genre['id'] not in self.checked_genres.keys():
@@ -248,7 +246,7 @@ class SearchWindow(QWidget):
                     new_label.setAlignment(Qt.AlignVCenter|Qt.AlignHCenter)
                     new_btn.setObjectName('deletion')
                     new_btn.setFixedSize(40, 40)
-                    new_btn.clicked.connect(lambda: self.delete_genre(genre['id']))
+                    new_btn.clicked.connect(lambda: self.__delete_genre(genre['id']))
                     self.v_layout.itemAt(self.current_row_genre + 1).insertWidget(insert_pos, new_btn)
                     self.v_layout.itemAt(self.current_row_genre + 1).insertWidget(insert_pos, new_label)
                     self.v_layout.itemAt(self.current_row_genre + 1).insertWidget(insert_pos + 2, self.genres_edit)
@@ -263,7 +261,7 @@ class SearchWindow(QWidget):
         QTimer.singleShot(0, self.genres_edit.clear)
         self.genres_edit.setFocus()
 
-    def delete_genre(self, id):
+    def __delete_genre(self, id):
         for _ in range(self.current_row_genre + 1):
             layout: QHBoxLayout = self.v_layout.itemAt(1)
             for j in range(layout.count() - 1):
@@ -284,147 +282,52 @@ class SearchWindow(QWidget):
         for key in genres_ids:
             for genre in genres:
                 if genre['id'] == key:
-                    self.update_checked_genres(genre['name'].lower())
+                    self.__update_checked_genres(genre['name'].lower())
                     break
 
+    def __pixmap_from_url(self, url):
+        session = DNSClientSession('9.9.9.9')
+        response = session.get(url, stream=True, timeout=20)
+        image_data = response.content
+        byte_array = QByteArray(image_data)
+        pixmap = QPixmap()
+        pixmap.loadFromData(byte_array)
+        return pixmap
+    
     @pyqtSlot()
     def __search(self):
         results_layout = QVBoxLayout()
+        results_layout.addLayout(QHBoxLayout())
         self.results_widget = QWidget()
-        querry_url = url
-        self.genres_ids = ''
-        for id in self.checked_genres.keys():
-                self.genres_ids += f'{id},'
-        self.search_param = [f'page={self.page_num}', f'include_adult={self.adult_inc}', f'language={self.lang}', f'with_genres={self.genres_ids}', f'sort_by={self.sort_param}']
-        for param in self.search_param:
-            if 'None' in param:
-                continue
-            querry_url += '&' + param
-        self.response = requests.get(url=querry_url, headers=headers)
-        print(self.response.json()['results'])
-        for film in self.response.json()['results']:
-            data = request.urlopen(f'https://image.tmdb.org/t/p/original{film['poster_path']}').read()
-            poster = QPixmap()
-            poster.loadFromData(data)
-            title = film['title']
-            rating = str(round(float(film['vote_average']), 1))
-            result = FilmCard(title, poster, rating)
-            results_layout.addLayout(result)
-            self.current_col_result += 1
-            if self.current_col_result > 2:
-                self.current_row_result += 1
-                self.current_col_result = 0
-            break
-        self.results_widget.setLayout(results_layout)
-        self.results.setWidget(self.results_widget)
-
-class AuthorizationWindow(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.initUI()
-
-    def initUI(self):
-        self.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=30, xOffset=0, yOffset=2))
-        self.setStyleSheet(""" 
-        QWidget#container {
-            background-color: #f0f0f0;
-            border: 1px solid #ccc;
-            border-radius: 5%;
-            padding: 20px;
-        }
-        QLabel {
-            font-size: 18pt;
-            font-family: Calibri;
-            font-weight: bold;
-        }
-        QLineEdit {
-            font-size: 14pt;
-            font-family: Calibri;
-            background-color: #fff;
-            border: 1px solid #ccc;
-            border-radius: 5%;
-            padding: 5px;
-        }
-        QPushButton {
-            font-size: 16pt;
-            font-family: Calibri;
-            background-color: #4CAF50;
-            color: #fff;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-        }
-        QPushButton#register {
-            background-color: #bbb;
-        }
-        QPushButton#register:hover {
-            background-color: #888;
-        }
-        QPushButton:hover {
-            background-color: #3e8e41;
-        }
-        """)
-
-        self.username_edit = QLineEdit()
-        self.username_edit.setPlaceholderText('Логин')
-        self.username_edit.setMaximumWidth(600)
-        self.username_edit.setMinimumHeight(60)
-
-        self.password_edit = QLineEdit()
-        self.password_edit.setPlaceholderText('Пароль')
-        self.password_edit.setMaximumWidth(600)
-        self.password_edit.setMinimumHeight(60)
-
-        button_login = QPushButton("Вход")
-        button_login.clicked.connect(self.__login)
-        button_login.setCursor(Qt.PointingHandCursor)
-
-        button_register = QPushButton("Регистрация")
-        button_register.clicked.connect(self.__login)
-        button_register.setCursor(Qt.PointingHandCursor)
-        button_register.setObjectName('register')
-
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(button_login)
-        button_layout.addWidget(button_register)
-
-        container = QWidget()
-        container.setObjectName("container")
-
-        layout = QVBoxLayout()
-        label = QLabel('Авторизация')
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
-        layout.addWidget(self.username_edit)
-        layout.addWidget(self.password_edit)
-        layout.addLayout(button_layout)
-
-        container.setLayout(layout)
-        container.setMinimumSize(300, 300)
-
-        v_layout = QVBoxLayout()
-        v_layout.addStretch()
-        v_layout.addWidget(container)
-        v_layout.addStretch()
-        main_layout = QHBoxLayout()
-        main_layout.addStretch()
-        main_layout.addLayout(v_layout)
-        main_layout.addStretch()
-
-        self.setLayout(main_layout)
         
-    @pyqtSlot()
-    def __login(self):
-        username = self.username_edit.text()
-        password = self.password_edit.text()
+        search_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'], 
+                         'query': [self.search_edit.text()]} if self.search_edit.text() else None
+        discover_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'],
+                           'with_genres': [str(id) if self.checked_genres[id] else '' for id in self.checked_genres.keys()],
+                           'sort_by': [self.sort_param]} if self.checked_genres else None
 
-        # Here you can add your login logic, e.g. send a request to the API
-        # For now, just print the credentials
-        print(f"Username: {username}, Password: {password}")
+        response = DataProvider.api_request(search_params, discover_params)
 
-        # If the login is successful, you can show the main window
-        # app_window.setTabVisible(1, True)
-        # self.close()
+        if response:
+            for film in response:
+                poster = self.__pixmap_from_url(f'https://image.tmdb.org/t/p/original{film['poster_path']}')
+                title = film['title']
+                rating = str(round(float(film['vote_average']), 1))
+                result = FilmCard(title, poster, rating)
+                results_layout.addLayout(QHBoxLayout())
+                results_layout.itemAt(self.current_row_result).addLayout(result)
+                self.current_col_result += 1
+                if self.current_col_result > 2:
+                    self.current_row_result += 1
+                    self.current_col_result = 0
+                    results_layout.addLayout(QHBoxLayout())
+                break
+            if not self.current_row_result:
+                results_layout.addStretch()
+            self.results_widget.setLayout(results_layout)
+            self.results.setWidget(self.results_widget)
+        else: 
+            print('Ошибка поиска')
         
 class AppWindow(QTabWidget):
     def __init__(self, **tabs):
@@ -458,6 +361,6 @@ class AppWindow(QTabWidget):
 
 
 app = QApplication(sys.argv)
-app_window = AppWindow(Авторизация = AuthorizationWindow(), Поиск = SearchWindow())
+app_window = AppWindow(Поиск = SearchWindow())
 app_window.showMaximized()
 sys.exit(app.exec_())
