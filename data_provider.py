@@ -49,10 +49,14 @@ class DataProvider:
             response = search_response
         else: 
             response = False
-        print(request)
-        print(response)
-        
         return response
+    
+    @staticmethod
+    def get_image_bin(image_path: str):
+        session = DNSClientSession('9.9.9.9')
+        url = f'https://image.tmdb.org/t/p/original{image_path}'
+        response = session.get(url, stream=True, timeout=20)
+        return response.content
     
     @staticmethod
     def db_request(query: str):

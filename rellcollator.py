@@ -1,93 +1,29 @@
-import sys
+import sys, asyncio
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
-from dns_client.adapters.requests import DNSClientSession
 from data_provider import DataProvider
+from collections import deque
 
-base_url = "https://api.themoviedb.org/3/!/movie?"
-headers = {
-    "accept": "application/json",
-    "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIxMjQ3YTcwYmZmYmYzZGZhMWQzNDAxMWEyOWE4ZjdkMyIsInN1YiI6IjY1ZWMwODhlOWQ4OTM5MDE2MjI5OTM4NCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.OxTkKEPFIGD_iIm522Tj18ERii7aE3Su9_Uc996u3yw"
-}
-genres = [
-    {
-        "id": 28,
-        "name": "Боевик"
-    },
-    {
-        "id": 12,
-        "name": "Приключения"
-    },
-    {
-        "id": 16,
-        "name": "Мультфильм"
-    },
-    {
-        "id": 35,
-        "name": "Комедия"
-    },
-    {
-        "id": 80,
-        "name": "Криминал"
-    },
-    {
-        "id": 99,
-        "name": "Документальный"
-    },
-    {
-        "id": 18,
-        "name": "Драма"
-    },
-    {
-        "id": 10751,
-        "name": "Семейный"
-    },
-    {
-        "id": 14,
-        "name": "Фэнтези"
-    },
-    {
-        "id": 36,
-        "name": "История"
-    },
-    {
-        "id": 27,
-        "name": "Ужасы"
-    },
-    {
-        "id": 10402,
-        "name": "Музыка"
-    },
-    {
-        "id": 9648,
-        "name": "Детектив"
-    },
-    {
-        "id": 10749,
-        "name": "Мелодрама"
-    },
-    {
-        "id": 878,
-        "name": "Фантастика"
-    },
-    {
-        "id": 10770,
-        "name": "ТВ фильм"
-    },
-    {
-        "id": 53,
-        "name": "Триллер"
-    },
-    {
-        "id": 10752,
-        "name": "Военный"
-    },
-    {
-        "id": 37,
-        "name": "Вестерн"
-    }
-]
+class ImageLoader(QRunnable):
+    def __init__(self, poster_path, title, rating, callback):
+        super().__init__()
+        self.poster_path = poster_path
+        self.title = title
+        self.rating = rating
+        self.callback = callback
+
+    def run(self):
+        image_data = DataProvider.get_image_bin(self.poster_path)
+        pixmap = self.__pixmap_from_bytes(image_data)
+        QMetaObject.invokeMethod(self.callback, "add_film_card", Qt.QueuedConnection, Q_ARG(QPixmap, pixmap), Q_ARG(str, self.title), Q_ARG(str, self.rating))
+
+    def __pixmap_from_bytes(self, image_bin):
+        byte_array = QByteArray(image_bin)
+        pixmap = QPixmap()
+        pixmap.loadFromData(byte_array)
+        return pixmap
+    
 class FilmCard(QVBoxLayout):
     def __init__(self, title, poster, rating):
         super().__init__()
@@ -101,12 +37,12 @@ class FilmCard(QVBoxLayout):
         title = QLabel(text=self.title)
         title.setStyleSheet('font-size: 18pt;')
         title.setWordWrap(True)
-        rating = QLabel(text=self.rating)
-        rating.setStyleSheet('font-size: 18pt; padding-left: 5px; padding-right: 5px; background-color: rgb(%s, %s, 0); border-radius: 5px; color: #fff' % (255 - int(float(self.rating)*20), int(float(self.rating)*20)))
+        rating = QLabel(text=self.rating if float(self.rating) > 0 else 'нет\nоценок')
+        bg_color = f'rgb({255 - int(float(self.rating)*20)}, {int(float(self.rating)*20)}, 0)' if float(self.rating) > 0 else 'gray'
+        rating.setStyleSheet(f'font-size: 18pt; padding-left: 5px; padding-right: 5px; background-color: {bg_color}; border-radius: 5px; color: #fff')
         poster.setPixmap(self.poster.scaled(500, 500, Qt.KeepAspectRatio))
         poster.setScaledContents(True)
         poster.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
-        title.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
         rating.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
         self.addWidget(poster)
         h_layout = QHBoxLayout()
@@ -123,11 +59,9 @@ class SearchWindow(QWidget):
         self.current_col_result = 0
         self.current_row_result = 0
         self.page_num = 1
-        self.adult_inc = 'false'
-        self.lang = 'ru-Ru'
         self.sort_param = 'popularity.desc'
-        self.release_year = 'None'
         self.genres_ids = ''
+        self.image_queue = deque()
         self.__initUI()
 
     def __initUI(self):
@@ -198,7 +132,7 @@ class SearchWindow(QWidget):
 
         search_bttn = QPushButton('Поиск')
         search_bttn.setMinimumHeight(60)
-        search_bttn.clicked.connect(self.__search)
+        search_bttn.clicked.connect(self.start_search)
         search_bttn.setCursor(Qt.PointingHandCursor)
 
         self.genres_edit = QLineEdit()
@@ -225,7 +159,11 @@ class SearchWindow(QWidget):
         self.v_layout.itemAt(1).addStretch()
         self.v_layout.addStretch()
         
+        self.results_layout = QVBoxLayout()
+        self.results_widget = QWidget()
         self.results = QScrollArea()
+        self.results.setWidgetResizable(True)
+        self.results.setWidget(self.results_widget)
 
         main_layout = QHBoxLayout()
         main_layout.addLayout(self.v_layout)
@@ -233,6 +171,9 @@ class SearchWindow(QWidget):
         main_layout.setStretch(0, 2)
         main_layout.setStretch(1, 3)
         self.setLayout(main_layout)
+        self.results_widget.setLayout(self.results_layout)
+        self.results_layout.addLayout(QHBoxLayout())
+        self.results_layout.addStretch()
 
     def __update_checked_genres(self, text):
         for genre in genres:
@@ -285,63 +226,60 @@ class SearchWindow(QWidget):
                     self.__update_checked_genres(genre['name'].lower())
                     break
 
-    def __pixmap_from_url(self, url):
-        session = DNSClientSession('9.9.9.9')
-        response = session.get(url, stream=True, timeout=20)
-        image_data = response.content
-        byte_array = QByteArray(image_data)
-        pixmap = QPixmap()
-        pixmap.loadFromData(byte_array)
-        return pixmap
-    
-    @pyqtSlot()
-    def __search(self):
-        results_layout = QVBoxLayout()
-        results_layout.addLayout(QHBoxLayout())
-        self.results_widget = QWidget()
-        
-        search_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'], 
-                         'query': [self.search_edit.text()]} if self.search_edit.text() else None
-        discover_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'],
-                           'with_genres': [str(id) if self.checked_genres[id] else '' for id in self.checked_genres.keys()],
-                           'sort_by': [self.sort_param]} if self.checked_genres else None
+    @pyqtSlot(QPixmap, str, str)
+    def add_film_card(self, pixmap, title, rating):
+        result = FilmCard(title, pixmap, rating)
+        self.results_layout.itemAt(self.results_layout.count()-2).insertLayout(self.current_col_result, result)
+        self.results_layout.itemAt(self.results_layout.count()-2).addStretch()
+        self.current_col_result += 1
+        if self.current_col_result > 2:
+            self.current_row_result += 1
+            self.current_col_result = 0
+            self.results_layout.insertLayout(self.results_layout.count()-1, QHBoxLayout())
+        self.process_next_image()
 
+    def process_next_image(self):
+        if self.image_queue:
+            poster_path, title, rating = self.image_queue.popleft()
+            loader = ImageLoader(poster_path, title, rating, self)
+            QThreadPool.globalInstance().start(loader)
+
+    async def __search(self):
+        search_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'], 
+                        'query': [self.search_edit.text()]} if self.search_edit.text() else None
+        discover_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'],
+                        'with_genres': [str(id) if self.checked_genres[id] else '' for id in self.checked_genres.keys()],
+                        'sort_by': [self.sort_param]} if self.checked_genres else None
         response = DataProvider.api_request(search_params, discover_params)
 
         if response:
             for film in response:
-                poster = self.__pixmap_from_url(f'https://image.tmdb.org/t/p/original{film['poster_path']}')
                 title = film['title']
                 rating = str(round(float(film['vote_average']), 1))
-                result = FilmCard(title, poster, rating)
-                results_layout.addLayout(QHBoxLayout())
-                results_layout.itemAt(self.current_row_result).addLayout(result)
-                self.current_col_result += 1
-                if self.current_col_result > 2:
-                    self.current_row_result += 1
-                    self.current_col_result = 0
-                    results_layout.addLayout(QHBoxLayout())
-                break
-            if not self.current_row_result:
-                results_layout.addStretch()
-            self.results_widget.setLayout(results_layout)
-            self.results.setWidget(self.results_widget)
+                poster_path = film['poster_path']
+                
+                self.image_queue.append((poster_path, title, rating))
+            self.process_next_image()
         else: 
-            print('Ошибка поиска')
+            print("ошибка")
+
+    def start_search(self):
+        asyncio.run(self.__search())
         
 class AppWindow(QTabWidget):
     def __init__(self, **tabs):
         super().__init__()
         self.setWindowTitle("Reelcollator")
         self.setMinimumSize(720, 480)
-        self.__set_ui()
+        
+        self.__init_ui()
         for key, value in tabs.items():
           self.addTab(value, str(key))
 
         for children in self.findChildren(QTabBar):
             children.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=20, xOffset=-3, yOffset=2))
-
-    def __set_ui(self):
+    
+    def __init_ui(self):
         self.setStyleSheet('''
         QTabBar::tab {
             background-color: #f0f0f0;
@@ -359,7 +297,9 @@ class AppWindow(QTabWidget):
         }
         ''')
 
-
+genres: list[dict[str, str | int]] = []
+for pair in DataProvider.db_request('SELECT * FROM genres'):
+    genres.append({'id': pair[0], 'name': pair[1]})
 app = QApplication(sys.argv)
 app_window = AppWindow(Поиск = SearchWindow())
 app_window.showMaximized()
