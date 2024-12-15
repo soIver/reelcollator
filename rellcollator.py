@@ -33,22 +33,44 @@ class FilmCard(QVBoxLayout):
         self.__init_ui()
 
     def __init_ui(self):
-        poster = QLabel()
-        title = QLabel(text=self.title)
-        title.setStyleSheet('font-size: 18pt;')
-        title.setWordWrap(True)
-        rating = QLabel(text=self.rating if float(self.rating) > 0 else 'нет\nоценок')
+        self.poster_obj = QLabel()
+        self.title_obj = QLabel(text=self.title)
+        self.title_obj.setStyleSheet('font-size: 18pt;')
+        self.title_obj.setWordWrap(True)
+        self.rating_obj = QLabel(text=self.rating if float(self.rating) > 0 else 'нет\nоценок')
         bg_color = f'rgb({255 - int(float(self.rating)*20)}, {int(float(self.rating)*20)}, 0)' if float(self.rating) > 0 else 'gray'
-        rating.setStyleSheet(f'font-size: 18pt; padding-left: 5px; padding-right: 5px; background-color: {bg_color}; border-radius: 5px; color: #fff')
-        poster.setPixmap(self.poster.scaled(500, 500, Qt.KeepAspectRatio))
-        poster.setScaledContents(True)
-        poster.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
-        rating.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
-        self.addWidget(poster)
+        self.rating_obj.setStyleSheet(f'font-size: 18pt; padding-left: 5px; padding-right: 5px; border: 2px solid #555; background-color: {bg_color}; border-radius: 5px; color: #fff')
+        self.poster_obj.setPixmap(self.poster.scaled(500, 500, Qt.KeepAspectRatio))
+        self.poster_obj.setScaledContents(True)
+        self.poster_obj.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
+        self.title_obj.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.rating_obj.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.rating_obj.setMaximumSize(80, 60)
+        self.addWidget(self.poster_obj)
         h_layout = QHBoxLayout()
-        h_layout.addWidget(title)
-        h_layout.addWidget(rating)
+        h_layout.addWidget(self.title_obj)
+        h_layout.addWidget(self.rating_obj)
         self.addLayout(h_layout)
+        self.poster_obj.setMouseTracking(True)
+        self.poster_obj.installEventFilter(self)
+
+    def __open_film_page():
+        pass
+    
+    def eventFilter(self, source, event):
+        if event.type() == QEvent.Enter and source is self.poster_obj:
+            self.poster_obj.setStyleSheet("border: 2px solid #555;")
+        elif event.type() == QEvent.Leave and source is self.poster_obj:
+            self.poster_obj.setStyleSheet("")
+        elif event.type() == QEvent.MouseButtonPress and source is self.poster_obj:
+            self.__open_film_page()
+        return super().eventFilter(source, event)
+
+    def delete(self):
+        self.title_obj.deleteLater()
+        self.rating_obj.deleteLater()
+        self.poster_obj.deleteLater()
+        self.deleteLater()
 
 class SearchWindow(QWidget):
     def __init__(self):
@@ -264,6 +286,19 @@ class SearchWindow(QWidget):
             print("ошибка")
 
     def start_search(self):
+        self.current_col_result = 0
+        self.current_row_result = 0
+        res_cnt = self.results_layout.count()
+        if res_cnt > 2:
+            for obj in self.results_layout.children():
+                if isinstance(obj, QHBoxLayout):
+                    for item in obj.children():
+                        if isinstance(item, FilmCard):
+                            item.delete()
+                        else:
+                            item.deleteLater()
+                    obj.deleteLater()
+        self.results_layout.insertItem(0, QHBoxLayout())
         asyncio.run(self.__search())
         
 class AppWindow(QTabWidget):
