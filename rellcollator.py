@@ -2,6 +2,7 @@ import sys, asyncio
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
+from PyQt5.QtSvg import QSvgWidget
 from data_provider import DataProvider
 from collections import deque
 
@@ -24,6 +25,40 @@ class ImageLoader(QRunnable):
         pixmap.loadFromData(byte_array)
         return pixmap
     
+class FilmPage(QWidget):
+    def __init__(self, **fdata):
+        super().__init__()
+        self.poster_img = fdata.get('poster', QPixmap())
+        self.title_txt = fdata.get('title', '')
+        self.description_txt = fdata.get('description', '')
+        self.__init_ui()
+
+    def __init_ui(self):
+        layout = QHBoxLayout()
+        leftside = QVBoxLayout()
+        self.poster = QLabel()
+        self.poster_link = QLineEdit()
+        self.stat_info_lt = QHBoxLayout()
+        self.rating = QLineEdit()
+        self.date = QLineEdit()
+        self.duration = QLineEdit()
+        rightside = QVBoxLayout()
+        self.title = QLabel(self.title_txt)
+        self.description = QLabel(self.description_txt)
+        leftside.addWidget(self.poster)
+        leftside.addWidget(self.poster_link)
+        leftside.addLayout(self.stat_info_lt)
+        rightside.addWidget(self.title)
+        rightside.addWidget(self.description)
+        layout.addLayout(leftside)
+        layout.addLayout(rightside)
+        self.stat_info_lt.addWidget(rating_svg)
+        self.stat_info_lt.addWidget(date_svg)
+        self.stat_info_lt.addWidget(duration_svg)
+        self.poster.setPixmap(self.poster_img)
+
+        self.setLayout(layout)
+        
 class FilmCard(QVBoxLayout):
     def __init__(self, title, poster, rating):
         super().__init__()
@@ -56,7 +91,7 @@ class FilmCard(QVBoxLayout):
 
     def __open_film_page():
         pass
-    
+
     def eventFilter(self, source, event):
         if event.type() == QEvent.Enter and source is self.poster_obj:
             self.poster_obj.setStyleSheet("border: 2px solid #555;")
@@ -336,6 +371,9 @@ genres: list[dict[str, str | int]] = []
 for pair in DataProvider.db_request('SELECT * FROM genres'):
     genres.append({'id': pair[0], 'name': pair[1]})
 app = QApplication(sys.argv)
-app_window = AppWindow(Поиск = SearchWindow())
+rating_svg = QSvgWidget('icons/rating.svg')
+date_svg = QSvgWidget('icons/date.svg')
+duration_svg = QSvgWidget('icons/duration.svg')
+app_window = AppWindow(Поиск = SearchWindow(), Фильм = FilmPage())
 app_window.showMaximized()
 sys.exit(app.exec_())
