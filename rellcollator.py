@@ -25,78 +25,209 @@ class ImageLoader(QRunnable):
         pixmap.loadFromData(byte_array)
         return pixmap
     
+class ScaledLabel(QLabel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pixmap_original = None
+        self.setScaledContents(False)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.setStyleSheet('border: 1px solid #ccc;')
+
+    def setPixmap(self, pixmap):
+        self.pixmap_original = pixmap
+        super().setPixmap(self.scaledPixmap())
+
+    def scaledPixmap(self):
+        if self.pixmap_original is None:
+            return QPixmap()
+
+        width = self.width()
+        height = self.height()
+
+        return self.pixmap_original.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.setPixmap(self.pixmap_original)
+
 class FilmPage(QWidget):
     def __init__(self, **fdata):
         super().__init__()
-        self.poster_img = fdata.get('poster', QPixmap())
+        self.id = fdata.get('id', '')
+        self.poster_img = fdata.get('poster', '')
         self.title_txt = fdata.get('title', '')
         self.description_txt = fdata.get('description', '')
+        self.rating_txt = fdata.get('rating', '')
         self.__init_ui()
 
     def __init_ui(self):
-        layout = QHBoxLayout()
-        leftside = QVBoxLayout()
-        self.poster = QLabel()
+        self.setStyleSheet("""
+        QWidget#container-param {
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 5%;
+            padding: 20px;
+        }
+        QLabel {
+            font-size: 15pt;
+            font-family: Calibri;
+            font-weight: bold;
+        }
+        QLineEdit {
+            font-size: 16pt;
+            font-family: Calibri;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            border-radius: 5%;
+            padding: 5px;
+        }
+        QLineEdit#genres-edit {
+            font-size: 15pt;
+            font-weight: bold;
+            background-color: #f0f0f0;
+            border: none;
+        }
+        QLineEdit#title-edit {
+            font-size: 24pt;
+            font-weight: bold;
+            background-color: #f0f0f0;
+            border: none;
+        }
+        QPushButton {
+            font-size: 16pt;
+            font-family: Calibri;
+            background-color: #4CAF50;
+            color: #fff;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+        }
+        QPushButton:hover {
+            background-color: #3e8e41;
+        }
+        QPushButton#settings {
+            background-color: #bbb;
+        }
+        QPushButton#settings:hover {
+            background-color: #888;
+        }
+        QPushButton#deletion {
+            background-color: #bbb;
+            color: #000;
+            border-radius: 20px;
+            padding: 0;
+            font-size: 20pt;
+            font-weight: bold
+        }
+        QPushButton#deletion:hover {
+            background-color: #d62828;
+            color: #fff
+        }
+        """)
+        self.poster = ScaledLabel()
+        if self.poster_img:
+            self.poster.setPixmap(self.poster_img)
         self.poster_link = QLineEdit()
-        self.stat_info_lt = QHBoxLayout()
-        self.rating = QLineEdit()
+        self.rating = QLabel(text=self.rating_txt)
+        self.rating.sizeHint = lambda: QSize(247, 60)
         self.date = QLineEdit()
+        self.date.sizeHint = lambda: QSize(247, 60)
         self.duration = QLineEdit()
-        rightside = QVBoxLayout()
-        self.title = QLabel(self.title_txt)
-        self.description = QLabel(self.description_txt)
-        leftside.addWidget(self.poster)
-        leftside.addWidget(self.poster_link)
-        leftside.addLayout(self.stat_info_lt)
-        rightside.addWidget(self.title)
-        rightside.addWidget(self.description)
-        layout.addLayout(leftside)
-        layout.addLayout(rightside)
-        self.stat_info_lt.addWidget(rating_svg)
-        self.stat_info_lt.addWidget(date_svg)
-        self.stat_info_lt.addWidget(duration_svg)
-        self.poster.setPixmap(self.poster_img)
+        self.duration.sizeHint = lambda: QSize(247, 60)
+        self.create_btn = QPushButton('Создать новую карточку фильма')
+        self.delete_btn = QPushButton('Удалить')
+        self.save_btn = QPushButton('Сохранить')
 
+        self.title = QLineEdit(self.title_txt)
+        self.title.setObjectName('title-edit')
+        self.description = QLineEdit(self.description_txt)
+
+        container = QVBoxLayout()
+        container.addWidget(self.description, alignment=Qt.AlignTop)
+        container_widget = QWidget()
+        container_widget.setLayout(container)
+        container_area = QScrollArea()
+        container_area.setWidgetResizable(True)
+        container_area.setWidget(container_widget)
+
+        leftside = QVBoxLayout()
+        leftside.addWidget(self.poster, alignment=Qt.AlignHCenter)
+        leftside.addWidget(self.poster_link)
+
+        rightside = QVBoxLayout()
+        rightside.addWidget(self.title)
+        rightside.addWidget(container_area)
+
+        botside = QHBoxLayout()
+        botside.addWidget(rating_svg)
+        botside.addWidget(self.rating)
+        botside.addWidget(date_svg)
+        botside.addWidget(self.date)
+        botside.addWidget(duration_svg)
+        botside.addWidget(self.duration)
+        botside.addWidget(self.create_btn)
+        botside.addStretch()
+        botside.addWidget(self.delete_btn)
+        botside.addWidget(self.save_btn)
+
+        topside = QHBoxLayout()
+        topside.addLayout(leftside)
+        topside.addLayout(rightside)
+
+        layout = QVBoxLayout()
+        layout.addLayout(topside)
+        layout.addLayout(botside)
         self.setLayout(layout)
         
-class FilmCard(QVBoxLayout):
+class FilmCard(QWidget):
     def __init__(self, title, poster, rating):
         super().__init__()
         self.title = title
         self.poster = poster
+        self.poster_copy = poster
         self.rating = rating
         self.__init_ui()
 
     def __init_ui(self):
-        self.poster_obj = QLabel()
+        layout = QVBoxLayout(self)  # Устанавливаем layout для виджета
+
+        self.poster_obj = ScaledLabel()
+        self.poster_obj.setPixmap(self.poster)
+        self.poster_obj.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.poster_obj.setFixedHeight(500)
+
         self.title_obj = QLabel(text=self.title)
-        self.title_obj.setStyleSheet('font-size: 18pt;')
+        self.title_obj.setStyleSheet('font-size: 18pt')
         self.title_obj.setWordWrap(True)
+
         self.rating_obj = QLabel(text=self.rating if float(self.rating) > 0 else 'нет\nоценок')
         bg_color = f'rgb({255 - int(float(self.rating)*20)}, {int(float(self.rating)*20)}, 0)' if float(self.rating) > 0 else 'gray'
         self.rating_obj.setStyleSheet(f'font-size: 18pt; padding-left: 5px; padding-right: 5px; border: 2px solid #555; background-color: {bg_color}; border-radius: 5px; color: #fff')
-        self.poster_obj.setPixmap(self.poster.scaled(500, 500, Qt.KeepAspectRatio))
-        self.poster_obj.setScaledContents(True)
-        self.poster_obj.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
-        self.title_obj.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.rating_obj.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.rating_obj.setMaximumSize(80, 60)
-        self.addWidget(self.poster_obj)
+
+        layout.addWidget(self.poster_obj)
+
         h_layout = QHBoxLayout()
-        h_layout.addWidget(self.title_obj)
+        h_layout.addWidget(self.title_obj, stretch=1)
         h_layout.addWidget(self.rating_obj)
-        self.addLayout(h_layout)
+
+        layout.addLayout(h_layout)
+
         self.poster_obj.setMouseTracking(True)
         self.poster_obj.installEventFilter(self)
 
-    def __open_film_page():
-        pass
+    def __open_film_page(self):
+        app_window.removeTab(1)
+        app_window.insertTab(1, FilmPage(title = self.title,
+                                         poster = self.poster_copy,
+                                         reting = self.rating), 'Фильм')
+        app_window.setCurrentIndex(1)
 
     def eventFilter(self, source, event):
         if event.type() == QEvent.Enter and source is self.poster_obj:
-            self.poster_obj.setStyleSheet("border: 2px solid #555;")
+            self.poster_obj.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=20, xOffset=3, yOffset=2))
         elif event.type() == QEvent.Leave and source is self.poster_obj:
-            self.poster_obj.setStyleSheet("")
+            self.poster_obj.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=0, xOffset=0, yOffset=0))
         elif event.type() == QEvent.MouseButtonPress and source is self.poster_obj:
             self.__open_film_page()
         return super().eventFilter(source, event)
@@ -105,6 +236,7 @@ class FilmCard(QVBoxLayout):
         self.title_obj.deleteLater()
         self.rating_obj.deleteLater()
         self.poster_obj.deleteLater()
+        self.layout().deleteLater()
         self.deleteLater()
 
 class SearchWindow(QWidget):
@@ -118,7 +250,6 @@ class SearchWindow(QWidget):
         self.page_num = 1
         self.sort_param = 'popularity.desc'
         self.genres_ids = ''
-        self.image_queue = deque()
         self.__initUI()
 
     def __initUI(self):
@@ -286,7 +417,7 @@ class SearchWindow(QWidget):
     @pyqtSlot(QPixmap, str, str)
     def add_film_card(self, pixmap, title, rating):
         result = FilmCard(title, pixmap, rating)
-        self.results_layout.itemAt(self.results_layout.count()-2).insertLayout(self.current_col_result, result)
+        self.results_layout.itemAt(self.results_layout.count()-2).insertWidget(self.current_col_result, result)
         self.results_layout.itemAt(self.results_layout.count()-2).addStretch()
         self.current_col_result += 1
         if self.current_col_result > 2:
@@ -324,17 +455,26 @@ class SearchWindow(QWidget):
         self.current_col_result = 0
         self.current_row_result = 0
         res_cnt = self.results_layout.count()
-        if res_cnt > 2:
-            for obj in self.results_layout.children():
-                if isinstance(obj, QHBoxLayout):
-                    for item in obj.children():
-                        if isinstance(item, FilmCard):
-                            item.delete()
-                        else:
-                            item.deleteLater()
-                    obj.deleteLater()
+        print(res_cnt)
+        self.clear_film_cards(self.results_layout)
         self.results_layout.insertItem(0, QHBoxLayout())
+        self.image_queue = deque()
         asyncio.run(self.__search())
+
+    def clear_film_cards(self, widget):
+        if isinstance(widget, FilmCard):
+            widget.setParent(None)
+            widget.deleteLater()
+            return
+
+        if isinstance(widget, QLayout):
+            for i in reversed(range(widget.count())):
+                item = widget.itemAt(i)
+                if item.widget():
+                    self.clear_film_cards(item.widget())
+                elif item.layout():
+                    self.clear_film_cards(item.layout())
+            return
         
 class AppWindow(QTabWidget):
     def __init__(self, **tabs):
@@ -374,6 +514,9 @@ app = QApplication(sys.argv)
 rating_svg = QSvgWidget('icons/rating.svg')
 date_svg = QSvgWidget('icons/date.svg')
 duration_svg = QSvgWidget('icons/duration.svg')
+rating_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
+date_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
+duration_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
 app_window = AppWindow(Поиск = SearchWindow(), Фильм = FilmPage())
 app_window.showMaximized()
 sys.exit(app.exec_())
