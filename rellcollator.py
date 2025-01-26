@@ -54,6 +54,98 @@ class ScaledLabel(QLabel):
         if self.pixmap_original:
             self.setPixmap(self.pixmap_original)
 
+class ParameterPanel(QWidget):
+    def __init__(self, name: str, placeholder: str, default: str, values: list[dict[str, str | int]], one_value: bool):
+        super().__init__()
+        self.checked_params: dict[int, list[int, int]] = {}
+        self.current_row, self.current_col = 0, 0
+        self.values = values
+        param_label = QLabel(name)
+        completer = QCompleter([value['name'] for value in values])
+        completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
+        self.param_edit = QLineEdit(default)
+        self.param_edit.setMaximumWidth(300)
+        self.param_edit.setPlaceholderText(placeholder)
+        self.param_edit.setCompleter(completer)
+        self.param_edit.setObjectName('param-edit')
+        self.main_lo = QVBoxLayout()
+        child_lo = QHBoxLayout()
+        if not one_value:
+            completer.activated.connect(lambda: self.__update_checked_params(self.param_edit.text()))
+            self.param_edit.returnPressed.connect(lambda: self.__update_checked_params(self.param_edit.text()))
+            label_lo = QHBoxLayout()
+            self.main_lo.addLayout(label_lo)
+            if name:
+                label_lo.addWidget(param_label)
+        else:
+            child_lo.addWidget(param_label)
+        child_lo.addWidget(self.param_edit)
+        child_lo.addStretch()
+        self.main_lo.addLayout(child_lo)
+        self.setLayout(self.main_lo)
+
+    def __update_checked_params(self, text: str):
+        for value in self.values:
+            if value['name'] == text:
+                if value['id'] not in self.checked_params:
+                    self.checked_params[value['id']] = (self.current_row, self.current_col)
+                    new_btn = QPushButton()
+                    new_btn.setObjectName('deletion')
+                    new_btn.setCursor(Qt.PointingHandCursor)
+                    new_btn.setFixedSize(40, 40)
+                    new_btn.clicked.connect(lambda: self.__delete_param(value['id']))
+                    new_btn.setText('×')
+                    new_label = QLabel(text)
+                    new_label.setAlignment(Qt.AlignCenter)
+
+                    layout = self.main_lo.itemAt(self.current_row + 1)
+                    if layout is None:
+                        layout = QHBoxLayout()
+                        self.main_lo.insertLayout(self.current_row + 1, layout)
+
+                    insert_pos = self.current_col * 2
+                    layout.insertWidget(insert_pos, new_btn)
+                    layout.insertWidget(insert_pos, new_label)
+
+                    self.current_col += 1
+                    if self.current_col == 3:
+                        self.current_col = 0
+                        self.current_row += 1
+                        new_layout = QHBoxLayout()
+                        self.main_lo.insertLayout(self.current_row + 1, new_layout)
+                        new_layout.addWidget(self.param_edit)
+                        new_layout.addStretch()
+                    else:
+                        layout.insertWidget(layout.count()-2, self.param_edit)
+                break
+        QTimer.singleShot(0, self.param_edit.clear)
+        self.param_edit.setFocus()
+        print(self.checked_params)
+
+    def __delete_param(self, id):
+        for _ in range(self.current_row + 1):
+            layout: QHBoxLayout = self.main_lo.itemAt(1)
+            for j in range(layout.count() - 1):
+                if layout.itemAt(j).widget() == self.param_edit:
+                    layout.removeWidget(layout.itemAt(j).widget())
+                else:
+                    layout.itemAt(j).widget().deleteLater()
+            self.main_lo.removeItem(layout)
+        self.current_row, self.current_col = 0, 0
+        self.main_lo.insertLayout(1, QHBoxLayout())
+        self.main_lo.itemAt(self.current_row + 1).addWidget(self.param_edit)
+        self.main_lo.itemAt(1).layout().addStretch()
+        self.param_edit.clear()
+        self.param_edit.setFocus()
+        self.checked_params.pop(id)
+        params_ids = self.checked_params.keys()
+        self.checked_params = {}
+        for key in params_ids:
+            for value in self.values:
+                if value['id'] == key:
+                    self.__update_checked_params(value['name'])
+                    break
+
 class FilmPage(QWidget):
     def __init__(self, **fdata):
         super().__init__()
@@ -67,6 +159,7 @@ class FilmPage(QWidget):
         self.revenue = details.get('revenue', '')
         self.runtime = details.get('runtime', '')
         self.description_txt = details.get('overview', '')
+        self.release_country = details.get('origin_country', [''])[0]
         self.poster_path = f'https://image.tmdb.org/t/p/original{details.get('poster_path', '')}'
         self.__init_ui()
 
@@ -74,7 +167,7 @@ class FilmPage(QWidget):
         self.poster = ScaledLabel()
         if self.poster_img:
             self.poster.setPixmap(self.poster_img)
-        self.poster_link = QLineEdit()
+        self.poster_link = QLineEdit(self.poster_path)
         self.rating = QLabel(text=self.rating_txt)
         self.rating.sizeHint = lambda: QSize(247, 60)
         self.date = QLineEdit(self.release_date)
@@ -88,9 +181,19 @@ class FilmPage(QWidget):
         self.title = QLineEdit(self.title_txt)
         self.title.setObjectName('title-edit')
         self.description = QPlainTextEdit(self.description_txt)
+        country_param = ParameterPanel('Страна:', '', self.release_country, [{'name': 'Россия'}, {'name': 'США'}], True)
+        director_param = ParameterPanel('Режиссёр:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], True)
+        actors_param = ParameterPanel('Актёры:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        actors_param = ParameterPanel('Жанры:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        actors_param = ParameterPanel('Ключевые слова:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
 
         container = QVBoxLayout()
         container.addWidget(self.description, alignment=Qt.AlignTop)
+        container.addWidget(country_param, alignment=Qt.AlignTop)
+        container.addWidget(director_param, alignment=Qt.AlignTop)
+        container.addWidget(actors_param, alignment=Qt.AlignTop)
+
+
         container_widget = QWidget()
         container_widget.setLayout(container)
         container_area = QScrollArea()
@@ -152,10 +255,16 @@ class FilmCard(QWidget):
         self.title_obj.setStyleSheet('font-size: 18pt')
         self.title_obj.setWordWrap(True)
 
-        self.rating_obj = QLabel(text=self.rating if float(self.rating) > 0 else 'нет\nоценок')
+        if float(self.rating) > 0:
+            font_size = 18
+            text = self.rating
+        else:
+            font_size = 12
+            text = 'нет\nоценок'
+        self.rating_obj = QLabel(text=text)
         bg_color = f'rgb({255 - int(float(self.rating)*20)}, {int(float(self.rating)*20)}, 0)' if float(self.rating) > 0 else 'gray'
-        self.rating_obj.setStyleSheet(f'font-size: 18pt; padding-left: 5px; padding-right: 5px; border: 2px solid #555; background-color: {bg_color}; border-radius: 5px; color: #fff')
-        self.rating_obj.setMaximumSize(80, 60)
+        self.rating_obj.setStyleSheet(f'font-size: {font_size}pt; padding-left: 5px; padding-right: 5px; border: 2px solid #555; background-color: {bg_color}; border-radius: 5px; color: #fff')
+        self.rating_obj.setMaximumSize(100, 60)
 
         layout.addWidget(self.poster_obj)
 
@@ -195,7 +304,6 @@ class FilmCard(QWidget):
 class SearchWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.checked_genres: dict[int, list[int, int]] = {}
         self.current_col_genre = 0
         self.current_row_genre = 0
         self.current_col_result = 0
@@ -216,16 +324,7 @@ class SearchWindow(QWidget):
         search_bttn.clicked.connect(self.start_search)
         search_bttn.setCursor(Qt.PointingHandCursor)
 
-        self.genres_edit = QLineEdit()
-        completer = QCompleter([genre['name'].lower() for genre in genres])
-        completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
-        completer.activated.connect(lambda: self.__update_checked_genres(self.genres_edit.text()))
-        self.genres_edit.setCompleter(completer)
-        self.genres_edit.setPlaceholderText('название жанра')
-        self.genres_edit.returnPressed.connect(lambda: self.__update_checked_genres(self.genres_edit.text()))
-        self.genres_edit.setObjectName('genres-edit')
-        self.genres_edit.setMaximumWidth(300)
-        self.genres_edit.setAlignment(Qt.AlignVCenter)
+        self.genres_edit = ParameterPanel('', 'название жанра', '', genres, False)
 
         h_layout = QHBoxLayout()
         h_layout.addWidget(self.search_edit)
@@ -257,69 +356,6 @@ class SearchWindow(QWidget):
         self.results_layout.addLayout(QHBoxLayout())
         self.results_layout.addStretch()
 
-    def __update_checked_genres(self, text):
-        for genre in genres:
-            if genre['name'].lower() == text.lower():
-                if genre['id'] not in self.checked_genres:
-                    self.checked_genres[genre['id']] = (self.current_row_genre, self.current_col_genre)
-
-                    new_btn = QPushButton()
-                    new_btn.setObjectName('deletion')
-                    new_btn.setCursor(Qt.PointingHandCursor)
-                    new_btn.setFixedSize(40, 40)
-                    new_btn.clicked.connect(lambda: self.__delete_genre(genre['id']))
-                    new_btn.setText('×')
-                    new_label = QLabel(text)
-                    new_label.setAlignment(Qt.AlignCenter)
-
-                    layout = self.v_layout.itemAt(self.current_row_genre + 1)
-                    if layout is None:
-                        layout = QHBoxLayout()
-                        self.v_layout.insertLayout(self.current_row_genre + 1, layout)
-
-                    insert_pos = self.current_col_genre * 2
-                    layout.insertWidget(insert_pos, new_btn)
-                    layout.insertWidget(insert_pos, new_label)
-
-                    self.current_col_genre += 1
-                    if self.current_col_genre == 3:
-                        self.current_col_genre = 0
-                        self.current_row_genre += 1
-                        new_layout = QHBoxLayout()
-                        self.v_layout.insertLayout(self.current_row_genre + 1, new_layout)
-                        new_layout.addWidget(self.genres_edit)
-                        new_layout.addStretch()
-                    else:
-                        layout.insertWidget(layout.count()-2, self.genres_edit)
-                break
-
-        QTimer.singleShot(0, self.genres_edit.clear)
-        self.genres_edit.setFocus()
-
-    def __delete_genre(self, id):
-        for _ in range(self.current_row_genre + 1):
-            layout: QHBoxLayout = self.v_layout.itemAt(1)
-            for j in range(layout.count() - 1):
-                if layout.itemAt(j).widget() == self.genres_edit:
-                    layout.removeWidget(layout.itemAt(j).widget())
-                else:
-                    layout.itemAt(j).widget().deleteLater()
-            self.v_layout.removeItem(layout)
-        self.current_row_genre, self.current_col_genre = 0, 0
-        self.v_layout.insertLayout(1, QHBoxLayout())
-        self.v_layout.itemAt(self.current_row_genre + 1).addWidget(self.genres_edit)
-        self.v_layout.itemAt(1).layout().addStretch()
-        self.genres_edit.clear()
-        self.genres_edit.setFocus()
-        self.checked_genres.pop(id)
-        genres_ids = self.checked_genres.keys()
-        self.checked_genres = {}
-        for key in genres_ids:
-            for genre in genres:
-                if genre['id'] == key:
-                    self.__update_checked_genres(genre['name'].lower())
-                    break
-
     @pyqtSlot(int, QPixmap, str, str)
     def add_film_card(self, fid, pixmap, title, rating):
         result = FilmCard(fid, title, pixmap, rating)
@@ -342,8 +378,8 @@ class SearchWindow(QWidget):
         search_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'], 
                         'query': [self.search_edit.text()]} if self.search_edit.text() else None
         discover_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'],
-                        'with_genres': [str(id) if self.checked_genres[id] else '' for id in self.checked_genres.keys()],
-                        'sort_by': [self.sort_param]} if self.checked_genres else None
+                        'with_genres': [str(id) if self.genres_edit.checked_params[id] else '' for id in self.genres_edit.checked_params.keys()],
+                        'sort_by': [self.sort_param]} if self.sort_param else None
         response = data_provider.api_request(search_params, discover_params)
 
         if response:
@@ -435,7 +471,7 @@ class AppWindow(QTabWidget):
             border-radius: 5%;
             padding: 5px;
         }
-        QLineEdit#genres-edit {
+        QLineEdit#param-edit {
             font-size: 15pt;
             font-weight: bold;
             background-color: #f0f0f0;
