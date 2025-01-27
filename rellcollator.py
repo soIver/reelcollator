@@ -25,15 +25,15 @@ class ImageLoader(QRunnable):
         pixmap = QPixmap()
         pixmap.loadFromData(byte_array)
         return pixmap
-    
+
 class ScaledLabel(QLabel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pixmap_original = None
         self.setScaledContents(False)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.setStyleSheet('border: 1px solid #ccc;')
         self.setMaximumSize(600, 900)
+        self.setAlignment(Qt.AlignLeft)
 
     def setPixmap(self, pixmap):
         self.pixmap_original = pixmap
@@ -43,10 +43,8 @@ class ScaledLabel(QLabel):
     def scaledPixmap(self):
         if self.pixmap_original is None:
             return QPixmap()
-
         width = self.width()
         height = self.height()
-
         return self.pixmap_original.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
     def resizeEvent(self, event):
@@ -156,7 +154,7 @@ class FilmPage(QWidget):
         self.rating_txt = fdata.get('rating', '')
         details = data_provider.details(self.fid)
         self.release_date = details.get('release_date', '')
-        self.revenue = details.get('revenue', '')
+        self.revenue_txt = details.get('revenue', '')
         self.runtime = details.get('runtime', '')
         self.description_txt = details.get('overview', '')
         self.release_country = details.get('origin_country', [''])[0]
@@ -167,6 +165,8 @@ class FilmPage(QWidget):
         self.poster = ScaledLabel()
         if self.poster_img:
             self.poster.setPixmap(self.poster_img)
+            self.poster.setAlignment(Qt.AlignCenter)
+            
         self.poster_link = QLineEdit(self.poster_path)
         self.rating = QLabel(text=self.rating_txt)
         self.rating.sizeHint = lambda: QSize(247, 60)
@@ -174,6 +174,8 @@ class FilmPage(QWidget):
         self.date.sizeHint = lambda: QSize(247, 60)
         self.duration = QLineEdit(str(self.runtime))
         self.duration.sizeHint = lambda: QSize(247, 60)
+        self.revenue = QLineEdit(str(self.revenue_txt))
+        self.revenue.sizeHint = lambda: QSize(247, 60)
         self.create_btn = QPushButton('Создать новую карточку фильма')
         self.delete_btn = QPushButton('Удалить')
         self.save_btn = QPushButton('Сохранить')
@@ -184,15 +186,16 @@ class FilmPage(QWidget):
         country_param = ParameterPanel('Страна:', '', self.release_country, [{'name': 'Россия'}, {'name': 'США'}], True)
         director_param = ParameterPanel('Режиссёр:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], True)
         actors_param = ParameterPanel('Актёры:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
-        actors_param = ParameterPanel('Жанры:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
-        actors_param = ParameterPanel('Ключевые слова:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        genres_param = ParameterPanel('Жанры:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        keywords_param = ParameterPanel('Ключевые слова:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
 
         container = QVBoxLayout()
         container.addWidget(self.description, alignment=Qt.AlignTop)
         container.addWidget(country_param, alignment=Qt.AlignTop)
         container.addWidget(director_param, alignment=Qt.AlignTop)
         container.addWidget(actors_param, alignment=Qt.AlignTop)
-
+        container.addWidget(genres_param, alignment=Qt.AlignTop)
+        container.addWidget(keywords_param, alignment=Qt.AlignTop)
 
         container_widget = QWidget()
         container_widget.setLayout(container)
@@ -200,38 +203,42 @@ class FilmPage(QWidget):
         container_area.setWidgetResizable(True)
         container_area.setWidget(container_widget)
 
+        botside_l = QGridLayout()
+        botside_l.addWidget(rating_svg, 0, 0)
+        botside_l.addWidget(self.rating, 0, 1)
+        botside_l.addWidget(date_svg, 0, 2)
+        botside_l.addWidget(self.date, 0, 3)
+        botside_l.addWidget(duration_svg, 1, 0)
+        botside_l.addWidget(self.duration, 1, 1)
+        botside_l.addWidget(revenue_svg, 1, 2)
+        botside_l.addWidget(self.revenue, 1, 3)
+
         leftside = QVBoxLayout()
         leftside.addWidget(self.poster, alignment=Qt.AlignHCenter)
         leftside.addWidget(self.poster_link)
+        leftside.addLayout(botside_l)
 
+        botside_r = QHBoxLayout()
+        botside_r.addWidget(self.create_btn)
+        botside_r.addStretch()
+        botside_r.addWidget(self.delete_btn)
+        botside_r.addWidget(self.save_btn)
         rightside = QVBoxLayout()
         rightside.addWidget(self.title)
         rightside.addWidget(container_area)
+        rightside.addLayout(botside_r)
 
-        botside = QHBoxLayout()
-        botside.addWidget(rating_svg)
-        botside.addWidget(self.rating)
-        botside.addWidget(date_svg)
-        botside.addWidget(self.date)
-        botside.addWidget(duration_svg)
-        botside.addWidget(self.duration)
-        botside.addWidget(self.create_btn)
-        botside.addStretch()
-        botside.addWidget(self.delete_btn)
-        botside.addWidget(self.save_btn)
+        layout = QHBoxLayout()
+        layout.addLayout(leftside)
+        layout.addLayout(rightside)
 
-        topside = QHBoxLayout()
-        topside.addLayout(leftside)
-        topside.addLayout(rightside)
-
-        layout = QVBoxLayout()
-        layout.addLayout(topside)
-        layout.addLayout(botside)
         self.setLayout(layout)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.poster.setFixedHeight(self.height() - 100)
+        self.poster.setFixedHeight(self.height() - 200)
+        self.poster.setFixedWidth(self.width() // 2 - 200)
+
         
 class FilmCard(QWidget):
     def __init__(self, fid: int, title: str, poster: QPixmap, rating: str):
@@ -314,7 +321,6 @@ class SearchWindow(QWidget):
         self.__initUI()
 
     def __initUI(self):
-        
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText('Введите название фильма')
         self.search_edit.setMinimumHeight(60)
@@ -324,7 +330,11 @@ class SearchWindow(QWidget):
         search_bttn.clicked.connect(self.start_search)
         search_bttn.setCursor(Qt.PointingHandCursor)
 
-        self.genres_edit = ParameterPanel('', 'название жанра', '', genres, False)
+        self.genres_panel = ParameterPanel('', 'с жанром', '', genres, False)
+        self.genres_panel_no = ParameterPanel('', 'без жанра', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        self.keywords_panel = ParameterPanel('', 'с ключевым словом', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        self.keywords_panel_no = ParameterPanel('', 'без ключевого слова', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        self.actors_panel = ParameterPanel('', 'с актёром', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
 
         h_layout = QHBoxLayout()
         h_layout.addWidget(self.search_edit)
@@ -334,9 +344,11 @@ class SearchWindow(QWidget):
 
         self.v_layout = QVBoxLayout()
         self.v_layout.addLayout(h_layout)
-        self.v_layout.addLayout(QHBoxLayout())
-        self.v_layout.itemAt(1).addWidget(self.genres_edit)
-        self.v_layout.itemAt(1).addStretch()
+        self.v_layout.addWidget(self.genres_panel)
+        self.v_layout.addWidget(self.genres_panel_no)
+        self.v_layout.addWidget(self.keywords_panel)
+        self.v_layout.addWidget(self.keywords_panel_no)
+        self.v_layout.addWidget(self.actors_panel)
         self.v_layout.addStretch()
         
         self.results_layout = QVBoxLayout()
@@ -378,8 +390,8 @@ class SearchWindow(QWidget):
         search_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'], 
                         'query': [self.search_edit.text()]} if self.search_edit.text() else None
         discover_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'],
-                        'with_genres': [str(id) if self.genres_edit.checked_params[id] else '' for id in self.genres_edit.checked_params.keys()],
-                        'sort_by': [self.sort_param]} if self.sort_param else None
+                        'with_genres': [str(id) if self.genres_panel.checked_params[id] else '' for id in self.genres_panel.checked_params.keys()],
+                        'sort_by': [self.sort_param]} if self.genres_panel.checked_params else None
         response = data_provider.api_request(search_params, discover_params)
 
         if response:
@@ -416,6 +428,7 @@ class SearchWindow(QWidget):
                 elif item.layout():
                     self.clear_film_cards(item.layout())
             return
+    
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.results_widget.setFixedWidth(self.results.width()-5)
@@ -520,15 +533,17 @@ class AppWindow(QTabWidget):
 
 data_provider = DataProvider()
 genres: list[dict[str, str | int]] = []
-for pair in data_provider.db_request('SELECT * FROM genres'):
-    genres.append({'id': pair[0], 'name': pair[1]})
+for genre in data_provider.db_request('SELECT * FROM genres'):
+    genres.append({'id': genre['id'], 'name': genre['name']})
 app = QApplication(sys.argv)
 rating_svg = QSvgWidget('icons/rating.svg')
 date_svg = QSvgWidget('icons/date.svg')
 duration_svg = QSvgWidget('icons/duration.svg')
+revenue_svg = QSvgWidget('icons/revenue.svg')
 rating_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
 date_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
 duration_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
+revenue_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
 app_window = AppWindow(Поиск = SearchWindow(), Фильм = FilmPage())
 app_window.showMaximized()
 sys.exit(app.exec_())

@@ -1,13 +1,6 @@
 from dns_client.adapters.requests import DNSClientSession
 from contextlib import closing
-import psycopg2
-
-def title_encode(url: str):
-            encoded_url = ""
-            for char in url:
-                encoded_char = char.encode('utf-8').hex().upper()
-                encoded_url += f"%{encoded_char[:2]}%{encoded_char[2:]}"
-            return encoded_url
+import psycopg2, psycopg2.extras
 
 base_url = "https://api.themoviedb.org/3!/movie?"
 headers = {
@@ -33,6 +26,7 @@ class DataProvider:
         for key, value in params.items():
             request += f'{key}='
             request += ','.join(value) + '&'
+        print(request)
         return self.session.get(url=request.strip('&'), headers=headers).json()['results']
     
     def discover(self, params: dict[str, list[str]]):
@@ -40,6 +34,8 @@ class DataProvider:
         for key, value in params.items():
             request += f'{key}='
             request += ','.join(value) + '&'
+        print(request)
+
         return self.session.get(url=request.strip('&'), headers=headers).json()['results']
          
     def api_request(self, search_params: dict[str, list[str]] = None, discover_params: dict[str, list[str]] = None):
@@ -68,7 +64,7 @@ class DataProvider:
     def db_request(self, query: str):
         with closing(psycopg2.connect(dbname=dbname, user=user, password=password, host=host)) as conn:
             conn.autocommit = True
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                 cursor.execute(query)
                 result = cursor.fetchall()
         return result
