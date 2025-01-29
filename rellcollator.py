@@ -344,29 +344,27 @@ class SortButtons(QWidget):
             self.sort_asc.setGraphicsEffect(self.disabled_effect)
         self.value = 'desc' if self.value_bool else 'asc'
 
-
 class SearchWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_col_genre = 0
-        self.current_row_genre = 0
-        self.current_col_result = 0
-        self.current_row_result = 0
-        self.page_num = 1
         self.sort_params = {'vote_average': 'рейтингу',
                             'primary_release_date': 'дате выхода',
                             'revenue': 'сумме сборов'}
         self.__initUI()
 
     def __initUI(self):
+        self.disabled_effect = QGraphicsColorizeEffect()
+        self.disabled_effect.setColor(QColor(0, 0, 0, 10))
+        self.effect_spot = QWidget()
+
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText('Введите название фильма')
         self.search_edit.setMinimumHeight(60)
 
-        search_bttn = QPushButton('Поиск')
-        search_bttn.setMinimumHeight(60)
-        search_bttn.clicked.connect(self.start_search)
-        search_bttn.setCursor(Qt.PointingHandCursor)
+        self.search_bttn = QPushButton('Поиск')
+        self.search_bttn.setMinimumHeight(60)
+        self.search_bttn.clicked.connect(self.start_search)
+        self.search_bttn.setCursor(Qt.PointingHandCursor)
 
         sort_label = QLabel('Сортировать результаты по')
         self.sort_panel = ParameterPanel('', '', '', self.sort_params, True)
@@ -391,7 +389,7 @@ class SearchWindow(QWidget):
 
         searchbox_layout = QHBoxLayout()
         searchbox_layout.addWidget(self.search_edit)
-        searchbox_layout.addWidget(search_bttn)
+        searchbox_layout.addWidget(self.search_bttn)
         searchbox_layout.setStretch(0, 8)
         searchbox_layout.setStretch(1, 1)
 
@@ -416,49 +414,54 @@ class SearchWindow(QWidget):
         self.v_layout.addWidget(self.actors_panel)
         self.v_layout.addStretch()
         
-        self.results_layout = QVBoxLayout()
-        self.results_widget = QWidget()
-        
-        self.results = QScrollArea()
-        self.results.setWidgetResizable(True)
-        self.results.setWidget(self.results_widget)
+        self.results = ResultsPanel()
 
         main_layout = QHBoxLayout()
         main_layout.addLayout(self.v_layout)
         main_layout.addWidget(self.results)
+        
         main_layout.setStretch(0, 2)
         main_layout.setStretch(1, 3)
         self.setLayout(main_layout)
-        self.results_widget.setLayout(self.results_layout)
-        self.results_layout.addLayout(QHBoxLayout())
-        self.results_layout.addStretch()
 
     @pyqtSlot(int, QPixmap, str, str)
     def add_film_card(self, fid, pixmap, title, rating):
         result = FilmCard(fid, title, pixmap, rating)
-        self.results_layout.itemAt(self.results_layout.count()-2).insertWidget(self.current_col_result, result, alignment = Qt.AlignTop | Qt.AlignLeft)
-        self.results_layout.itemAt(self.results_layout.count()-2).addStretch()
-        self.current_col_result += 1
-        if self.current_col_result > 2:
-            self.current_row_result += 1
-            self.current_col_result = 0
-            self.results_layout.insertLayout(self.results_layout.count()-1, QHBoxLayout())
+        self.results.results_layout.itemAt(self.results.results_layout.count()-2).insertWidget(self.results.current_col_result, result, alignment = Qt.AlignTop | Qt.AlignLeft)
+        self.results.results_layout.itemAt(self.results.results_layout.count()-2).addStretch()
+        self.results.current_col_result += 1
+        if self.results.current_col_result > 2:
+            self.results.current_row_result += 1
+            self.results.current_col_result = 0
+            self.results.results_layout.insertLayout(self.results.results_layout.count()-1, QHBoxLayout())
         self.process_next_image()
 
     def process_next_image(self):
         if self.image_queue:
+            if self.results.film_cnt > 8:
+                self.results.film_cnt = 0
+                self.results.current_col_result = 0
+                self.results.current_row_result = 0
+                self.results.add_page()
+
             fid, poster_path, title, rating = self.image_queue.popleft()
             loader = ImageLoader(fid, poster_path, title, rating, self)
             QThreadPool.globalInstance().start(loader)
+            self.results.film_cnt += 1
+    
+    def show_msg(self, msg: str):
+        print(msg)
 
     async def __search(self):
         release_date_gte, release_date_lte = self.date_edit.text().split('-')
         release_date_gte, release_date_lte = release_date_gte.split('.'), release_date_lte.split('.')
         release_date_gte.reverse()
         release_date_lte.reverse()
-        search_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'], 
+        if int(''.join(release_date_gte)) > int(''.join(release_date_lte)):
+            self.show_msg('Первая дата интервала выхода фильма не может быть больше второй')
+        search_params = {'page': [str(self.results.page_cnt)], 'include_adult': ['false'], 'language': ['ru-RU'], 
                         'query': [self.search_edit.text()]} if self.search_edit.text() else None
-        discover_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'],
+        discover_params = {'page': [str(self.results.page_cnt)], 'include_adult': ['false'], 'language': ['ru-RU'],
                         'with_genres': [str(id) for id in self.genres_panel.checked_params.keys()],
                         'without_genres': [str(id) for id in self.genres_panel_no.checked_params.keys()],
                         'with_keywords': [str(id) for id in self.keywords_panel.checked_params.keys()],
@@ -476,39 +479,74 @@ class SearchWindow(QWidget):
                 title = film['title']
                 rating = str(round(float(film['vote_average']), 1))
                 poster_path = film['poster_path']
-                
                 self.image_queue.append((fid, poster_path, title, rating))
             self.process_next_image()
         else: 
-            print("ошибка")
+            self.show_msg('По Вашему запросу ничего не было найдено')
 
     def start_search(self):
-        self.current_col_result = 0
-        self.current_row_result = 0
-        self.clear_film_cards(self.results_layout)
-        self.results_layout.insertItem(0, QHBoxLayout())
+        self.search_bttn.setDisabled(True)
+        self.search_bttn.setGraphicsEffect(self.disabled_effect)
+        QTimer.singleShot(2000, lambda: self.effect_spot.setGraphicsEffect(self.disabled_effect) == self.search_bttn.setDisabled(False))
+        
+        self.clear_results(self.results.results_layout)
+        self.results.results_layout.insertItem(0, QHBoxLayout())
         self.image_queue = deque()
         asyncio.run(self.__search())
 
-    def clear_film_cards(self, widget):
-        if isinstance(widget, FilmCard):
-            widget.setParent(None)
+    def clear_results(self, widget):
+        self.results.current_col_result = 0
+        self.results.current_row_result = 0
+        self.results.page_num = 1
+        self.results.page_cnt = 0
+        self.results.film_cnt = 0
+        while self.results.count() > 0:
+            widget = self.results.widget(0)
+            self.results.removeWidget(widget)
             widget.deleteLater()
-            return
-
-        if isinstance(widget, QLayout):
-            for i in reversed(range(widget.count())):
-                item = widget.itemAt(i)
-                if item.widget():
-                    self.clear_film_cards(item.widget())
-                elif item.layout():
-                    self.clear_film_cards(item.layout())
-            return
+        self.results.add_page()
     
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.results_widget.setFixedWidth(self.results.width()-5)
-        self.results_widget.setFixedHeight(self.results.height()//2 * 10)
+        self.results.results_widget.setFixedWidth(self.results.width()-10)
+
+class ResultsPanel(QStackedWidget):
+    def __init__(self):
+        super().__init__()
+        self.current_col_result = 0
+        self.current_row_result = 0
+        self.page_cnt = 0
+        self.film_cnt = 0
+        self.page_num = 1
+        self.add_page()
+
+    def add_page(self):
+        self.page_cnt += 1
+        
+        self.results_layout = QVBoxLayout()
+        self.results_layout.addLayout(QHBoxLayout())
+        self.results_layout.addStretch()
+
+        self.results_widget = QWidget()
+        self.results_widget.setLayout(self.results_layout)
+        self.results_widget.setFixedWidth(self.width()-10)
+
+        self.cur_page = QScrollArea()
+        self.cur_page.setWidgetResizable(True)
+        self.cur_page.verticalScrollBar().valueChanged.connect(self.on_scroll)
+        self.cur_page.setWidget(self.results_widget)
+
+        self.addWidget(self.cur_page)
+
+    def on_scroll(self, value):
+        max_value = 960
+        if value == 0 and self.page_num > 1:
+            self.page_num -= 1
+            self.setCurrentIndex(self.page_num-1)
+        elif value == max_value and self.page_num < self.page_cnt:
+            self.page_num += 1
+            self.setCurrentIndex(self.page_num-1)
+        print(value, max_value, self.page_num)
 
 class AppWindow(QTabWidget):
     def __init__(self, **tabs):

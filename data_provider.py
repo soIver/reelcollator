@@ -35,7 +35,7 @@ class DataProvider:
             request += f'{key}='
             request += ','.join(value) + '&'
         print(request)
-
+        print(self.session.get(url=request.strip('&'), headers=headers).json())
         return self.session.get(url=request.strip('&'), headers=headers).json()['results']
          
     def api_request(self, search_params: dict[str, list[str]] = None, discover_params: dict[str, list[str]] = None):
