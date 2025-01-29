@@ -5,6 +5,7 @@ from PyQt5.QtGui import *
 from PyQt5.QtSvg import QSvgWidget
 from data_provider import DataProvider
 from collections import deque
+from datetime import date
 
 class ImageLoader(QRunnable):
     def __init__(self, fid, poster_path, title, rating, callback):
@@ -53,13 +54,14 @@ class ScaledLabel(QLabel):
             self.setPixmap(self.pixmap_original)
 
 class ParameterPanel(QWidget):
-    def __init__(self, name: str, placeholder: str, default: str, values: list[dict[str, str | int]], one_value: bool):
+    def __init__(self, name: str, placeholder: str, default: str, values: dict[str | int, str], one_value: bool):
         super().__init__()
         self.checked_params: dict[int, list[int, int]] = {}
         self.current_row, self.current_col = 0, 0
         self.values = values
+        self.one_value = one_value
         param_label = QLabel(name)
-        completer = QCompleter([value['name'] for value in values])
+        completer = QCompleter([value for value in values.values()])
         completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
         self.param_edit = QLineEdit(default)
         self.param_edit.setMaximumWidth(300)
@@ -68,30 +70,35 @@ class ParameterPanel(QWidget):
         self.param_edit.setObjectName('param-edit')
         self.main_lo = QVBoxLayout()
         child_lo = QHBoxLayout()
+        completer.activated.connect(lambda: self.__update_checked_params(self.param_edit.text()))
+        self.param_edit.returnPressed.connect(lambda: self.__update_checked_params(self.param_edit.text()))
         if not one_value:
-            completer.activated.connect(lambda: self.__update_checked_params(self.param_edit.text()))
-            self.param_edit.returnPressed.connect(lambda: self.__update_checked_params(self.param_edit.text()))
             label_lo = QHBoxLayout()
             self.main_lo.addLayout(label_lo)
             if name:
                 label_lo.addWidget(param_label)
         else:
-            child_lo.addWidget(param_label)
+            if name:
+                child_lo.addWidget(param_label)
         child_lo.addWidget(self.param_edit)
         child_lo.addStretch()
         self.main_lo.addLayout(child_lo)
         self.setLayout(self.main_lo)
 
     def __update_checked_params(self, text: str):
-        for value in self.values:
-            if value['name'] == text:
-                if value['id'] not in self.checked_params:
-                    self.checked_params[value['id']] = (self.current_row, self.current_col)
+        for key in self.values.keys():
+            if self.values[key] == text:
+                if key not in self.checked_params:
+                    if self.one_value:
+                        self.checked_params = {}
+                        self.checked_params[key] = 0
+                        return
+                    self.checked_params[key] = (self.current_row, self.current_col)
                     new_btn = QPushButton()
                     new_btn.setObjectName('deletion')
                     new_btn.setCursor(Qt.PointingHandCursor)
                     new_btn.setFixedSize(40, 40)
-                    new_btn.clicked.connect(lambda: self.__delete_param(value['id']))
+                    new_btn.clicked.connect(lambda: self.__delete_param(key))
                     new_btn.setText('×')
                     new_label = QLabel(text)
                     new_label.setAlignment(Qt.AlignCenter)
@@ -118,7 +125,6 @@ class ParameterPanel(QWidget):
                 break
         QTimer.singleShot(0, self.param_edit.clear)
         self.param_edit.setFocus()
-        print(self.checked_params)
 
     def __delete_param(self, id):
         for _ in range(self.current_row + 1):
@@ -138,10 +144,10 @@ class ParameterPanel(QWidget):
         self.checked_params.pop(id)
         params_ids = self.checked_params.keys()
         self.checked_params = {}
-        for key in params_ids:
-            for value in self.values:
-                if value['id'] == key:
-                    self.__update_checked_params(value['name'])
+        for id in params_ids:
+            for key in self.values.keys():
+                if key == id:
+                    self.__update_checked_params(self.values[key])
                     break
 
 class FilmPage(QWidget):
@@ -183,11 +189,11 @@ class FilmPage(QWidget):
         self.title = QLineEdit(self.title_txt)
         self.title.setObjectName('title-edit')
         self.description = QPlainTextEdit(self.description_txt)
-        country_param = ParameterPanel('Страна:', '', self.release_country, [{'name': 'Россия'}, {'name': 'США'}], True)
-        director_param = ParameterPanel('Режиссёр:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], True)
-        actors_param = ParameterPanel('Актёры:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
-        genres_param = ParameterPanel('Жанры:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
-        keywords_param = ParameterPanel('Ключевые слова:', '', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        country_param = ParameterPanel('Страна:', '', self.release_country, countries, True)
+        director_param = ParameterPanel('Режиссёр:', '', '', directors, True)
+        actors_param = ParameterPanel('Актёры:', '', '', actors, False)
+        genres_param = ParameterPanel('Жанры:', '', '', genres, False)
+        keywords_param = ParameterPanel('Ключевые слова:', '', '', keywords, False)
 
         container = QVBoxLayout()
         container.addWidget(self.description, alignment=Qt.AlignTop)
@@ -204,13 +210,13 @@ class FilmPage(QWidget):
         container_area.setWidget(container_widget)
 
         botside_l = QGridLayout()
-        botside_l.addWidget(rating_svg, 0, 0)
+        botside_l.addWidget(icons['rating'], 0, 0)
         botside_l.addWidget(self.rating, 0, 1)
-        botside_l.addWidget(date_svg, 0, 2)
+        botside_l.addWidget(icons['date'], 0, 2)
         botside_l.addWidget(self.date, 0, 3)
-        botside_l.addWidget(duration_svg, 1, 0)
+        botside_l.addWidget(icons['duration'], 1, 0)
         botside_l.addWidget(self.duration, 1, 1)
-        botside_l.addWidget(revenue_svg, 1, 2)
+        botside_l.addWidget(icons['revenue'], 1, 2)
         botside_l.addWidget(self.revenue, 1, 3)
 
         leftside = QVBoxLayout()
@@ -308,6 +314,37 @@ class FilmCard(QWidget):
         self.layout().deleteLater()
         self.deleteLater()
 
+class SortButtons(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.value = 'desc'
+        self.value_bool = True
+        self.disabled_effect = QGraphicsColorizeEffect()
+        self.disabled_effect.setColor(QColor(0, 0, 0, 10))  
+        self.sort_asc = QPushButton('↑')
+        self.sort_asc.clicked.connect(self.__change_value)
+        self.sort_desc = QPushButton('↓')
+        self.sort_desc.clicked.connect(self.__change_value)
+        self.sort_desc.setDisabled(True)
+        self.sort_desc.setGraphicsEffect(self.disabled_effect)
+        main_layout = QHBoxLayout()
+        main_layout.addWidget(self.sort_asc)
+        main_layout.addWidget(self.sort_desc)
+        self.setLayout(main_layout)
+
+    def __change_value(self):
+        self.value_bool = not self.value_bool
+        if self.value_bool:
+            self.sort_asc.setDisabled(False)
+            self.sort_desc.setDisabled(True)
+            self.sort_desc.setGraphicsEffect(self.disabled_effect)
+        else:
+            self.sort_asc.setDisabled(True)
+            self.sort_desc.setDisabled(False)
+            self.sort_asc.setGraphicsEffect(self.disabled_effect)
+        self.value = 'desc' if self.value_bool else 'asc'
+
+
 class SearchWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -316,8 +353,9 @@ class SearchWindow(QWidget):
         self.current_col_result = 0
         self.current_row_result = 0
         self.page_num = 1
-        self.sort_param = 'popularity.desc'
-        self.genres_ids = ''
+        self.sort_params = {'vote_average': 'рейтингу',
+                            'primary_release_date': 'дате выхода',
+                            'revenue': 'сумме сборов'}
         self.__initUI()
 
     def __initUI(self):
@@ -330,20 +368,47 @@ class SearchWindow(QWidget):
         search_bttn.clicked.connect(self.start_search)
         search_bttn.setCursor(Qt.PointingHandCursor)
 
-        self.genres_panel = ParameterPanel('', 'с жанром', '', genres, False)
-        self.genres_panel_no = ParameterPanel('', 'без жанра', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
-        self.keywords_panel = ParameterPanel('', 'с ключевым словом', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
-        self.keywords_panel_no = ParameterPanel('', 'без ключевого слова', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
-        self.actors_panel = ParameterPanel('', 'с актёром', '', [{'name': 'Лукас', 'id': 1}, {'name': 'Пабло', 'id': 3}], False)
+        sort_label = QLabel('Сортировать результаты по')
+        self.sort_panel = ParameterPanel('', '', '', self.sort_params, True)
+        self.sort_panel.setMinimumWidth(250)
+        self.sort_panel.setObjectName('param-edit')
+        self.sort_asc_desc = SortButtons()
 
-        h_layout = QHBoxLayout()
-        h_layout.addWidget(self.search_edit)
-        h_layout.addWidget(search_bttn)
-        h_layout.setStretch(0, 8)
-        h_layout.setStretch(1, 1)
+        self.director_panel = ParameterPanel('', 'режиссёр', '', directors, True)
+        self.country_panel = ParameterPanel('', 'страна', '', countries, True)
+        self.date_edit = QLineEdit(self)
+        self.date_edit.setInputMask("00.00.0000-00.00.0000;_")
+        self.date_edit.setObjectName('param-edit')
+        today = date.today()
+        today = today.strftime("%d.%m.%Y")
+        self.date_edit.setText(f"28.12.1895-{today}")
+
+        self.genres_panel = ParameterPanel('', 'с жанром', '', genres, False)
+        self.genres_panel_no = ParameterPanel('', 'без жанра', '', genres, False)
+        self.keywords_panel = ParameterPanel('', 'с ключевым словом', '', keywords, False)
+        self.keywords_panel_no = ParameterPanel('', 'без ключевого слова', '', keywords, False)
+        self.actors_panel = ParameterPanel('', 'с актёром', '', actors, False)
+
+        searchbox_layout = QHBoxLayout()
+        searchbox_layout.addWidget(self.search_edit)
+        searchbox_layout.addWidget(search_bttn)
+        searchbox_layout.setStretch(0, 8)
+        searchbox_layout.setStretch(1, 1)
+
+        sort_layout = QHBoxLayout()
+        sort_layout.addWidget(sort_label)
+        sort_layout.addWidget(self.sort_panel)
+        sort_layout.addWidget(self.sort_asc_desc)
+
+        edits_layout = QHBoxLayout()
+        edits_layout.addWidget(self.director_panel)
+        edits_layout.addWidget(self.country_panel)
+        edits_layout.addWidget(self.date_edit)
 
         self.v_layout = QVBoxLayout()
-        self.v_layout.addLayout(h_layout)
+        self.v_layout.addLayout(searchbox_layout)
+        self.v_layout.addLayout(sort_layout)
+        self.v_layout.addLayout(edits_layout)
         self.v_layout.addWidget(self.genres_panel)
         self.v_layout.addWidget(self.genres_panel_no)
         self.v_layout.addWidget(self.keywords_panel)
@@ -387,11 +452,22 @@ class SearchWindow(QWidget):
             QThreadPool.globalInstance().start(loader)
 
     async def __search(self):
+        release_date_gte, release_date_lte = self.date_edit.text().split('-')
+        release_date_gte, release_date_lte = release_date_gte.split('.'), release_date_lte.split('.')
+        release_date_gte.reverse()
+        release_date_lte.reverse()
         search_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'], 
                         'query': [self.search_edit.text()]} if self.search_edit.text() else None
         discover_params = {'page': [str(self.page_num)], 'include_adult': ['false'], 'language': ['ru-RU'],
-                        'with_genres': [str(id) if self.genres_panel.checked_params[id] else '' for id in self.genres_panel.checked_params.keys()],
-                        'sort_by': [self.sort_param]} if self.genres_panel.checked_params else None
+                        'with_genres': [str(id) for id in self.genres_panel.checked_params.keys()],
+                        'without_genres': [str(id) for id in self.genres_panel_no.checked_params.keys()],
+                        'with_keywords': [str(id) for id in self.keywords_panel.checked_params.keys()],
+                        'without_keywords': [str(id) for id in self.keywords_panel_no.checked_params.keys()],
+                        'with_people': [str(id) for id in self.actors_panel.checked_params.keys()] + [str(id) for id in self.director_panel.checked_params.keys()],
+                        'with_origin_country': [str(id) for id in self.country_panel.checked_params.keys()],
+                        'release_date.gte': ['-'.join(release_date_gte)],
+                        'release_date.lte': ['-'.join(release_date_lte)],
+                        'sort_by': [f'{id}.{self.sort_asc_desc.value}' for id in self.sort_panel.checked_params.keys()]}
         response = data_provider.api_request(search_params, discover_params)
 
         if response:
@@ -465,12 +541,6 @@ class AppWindow(QTabWidget):
         QPlainTextEdit {
             font-size: 16pt;
         }
-        QWidget#container-param {
-            background-color: #f0f0f0;
-            border: 1px solid #ccc;
-            border-radius: 5%;
-            padding: 20px;
-        }
         QLabel {
             font-size: 15pt;
             font-family: Calibri;
@@ -532,18 +602,26 @@ class AppWindow(QTabWidget):
         ''')
 
 data_provider = DataProvider()
-genres: list[dict[str, str | int]] = []
-for genre in data_provider.db_request('SELECT * FROM genres'):
-    genres.append({'id': genre['id'], 'name': genre['name']})
+genres: dict[int, str] = {}
+keywords: dict[int, str] = {}
+directors: dict[int, str] = {}
+actors: dict[int, str] = {}
+countries: dict[str, str] = data_provider.get_countries()
+# data_provider.get_data(countries)
+
+for param in ('genres', 'keywords', 'directors', 'actors'):
+    for row in data_provider.db_request(f'SELECT * FROM {param}'):
+        if param in ('genres', 'keywords'):
+            locals()[param][row.get('id')] = row.get('name')
+        else:
+            locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])
+
 app = QApplication(sys.argv)
-rating_svg = QSvgWidget('icons/rating.svg')
-date_svg = QSvgWidget('icons/date.svg')
-duration_svg = QSvgWidget('icons/duration.svg')
-revenue_svg = QSvgWidget('icons/revenue.svg')
-rating_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
-date_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
-duration_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
-revenue_svg.renderer().setAspectRatioMode(Qt.KeepAspectRatio)
+icons = {}
+for iconame in ('rating', 'date', 'duration', 'revenue'):
+    icons[iconame] = QSvgWidget(f'icons/{iconame}.svg')
+    icons[iconame].renderer().setAspectRatioMode(Qt.KeepAspectRatio)
+
 app_window = AppWindow(Поиск = SearchWindow(), Фильм = FilmPage())
 app_window.showMaximized()
 sys.exit(app.exec_())
