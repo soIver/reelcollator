@@ -6,6 +6,7 @@ from PyQt5.QtSvg import QSvgWidget
 from data_provider import DataProvider
 from collections import deque
 from datetime import date
+from functools import partial
 
 class ImageLoader(QRunnable):
     def __init__(self, fid, poster_path, title, rating, callback):
@@ -102,6 +103,7 @@ class ParameterPanel(QWidget):
                     new_btn.setText('×')
                     new_label = QLabel(text)
                     new_label.setAlignment(Qt.AlignCenter)
+                    new_label.setObjectName('param')
 
                     layout = self.main_lo.itemAt(self.current_row + 1)
                     if layout is None:
@@ -158,7 +160,10 @@ class FilmPage(QWidget):
         self.title_txt = fdata.get('title', '')
         self.description_txt = fdata.get('description', '')
         self.rating_txt = fdata.get('rating', '')
-        details = data_provider.details(self.fid)
+        self.poster_path = ''
+        details = {}
+        if self.fid:
+            details = data_provider.details(self.fid)
         self.release_date = details.get('release_date', '')
         self.revenue_txt = details.get('revenue', '')
         self.runtime = details.get('runtime', '')
@@ -183,7 +188,11 @@ class FilmPage(QWidget):
         self.revenue = QLineEdit(str(self.revenue_txt))
         self.revenue.sizeHint = lambda: QSize(247, 60)
         self.create_btn = QPushButton('Создать новую карточку фильма')
+        self.create_btn.setDisabled(True)
+        self.create_btn.setGraphicsEffect(QGraphicsColorizeEffect(color=QColor(0, 0, 0, 10)))
         self.delete_btn = QPushButton('Удалить')
+        self.delete_btn.setDisabled(True)
+        self.delete_btn.setGraphicsEffect(QGraphicsColorizeEffect(color=QColor(0, 0, 0, 10)))
         self.save_btn = QPushButton('Сохранить')
 
         self.title = QLineEdit(self.title_txt)
@@ -209,15 +218,15 @@ class FilmPage(QWidget):
         container_area.setWidgetResizable(True)
         container_area.setWidget(container_widget)
 
-        botside_l = QGridLayout()
-        botside_l.addWidget(icons['rating'], 0, 0)
-        botside_l.addWidget(self.rating, 0, 1)
-        botside_l.addWidget(icons['date'], 0, 2)
-        botside_l.addWidget(self.date, 0, 3)
-        botside_l.addWidget(icons['duration'], 1, 0)
-        botside_l.addWidget(self.duration, 1, 1)
-        botside_l.addWidget(icons['revenue'], 1, 2)
-        botside_l.addWidget(self.revenue, 1, 3)
+        botside_l = QHBoxLayout()
+        botside_l.addWidget(icons['rating'])
+        botside_l.addWidget(self.rating)
+        botside_l.addWidget(icons['date'])
+        botside_l.addWidget(self.date)
+        botside_l.addWidget(icons['duration'])
+        botside_l.addWidget(self.duration)
+        # botside_l.addWidget(icons['revenue'])
+        # botside_l.addWidget(self.revenue)
 
         leftside = QVBoxLayout()
         leftside.addWidget(self.poster, alignment=Qt.AlignHCenter)
@@ -242,7 +251,7 @@ class FilmPage(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.poster.setFixedHeight(self.height() - 200)
+        self.poster.setFixedHeight(self.height() - 150)
         self.poster.setFixedWidth(self.width() // 2 - 200)
 
         
@@ -288,6 +297,7 @@ class FilmCard(QWidget):
         layout.addLayout(h_layout)
 
         self.poster_obj.setMouseTracking(True)
+        self.poster_obj.setCursor(Qt.PointingHandCursor)
         self.poster_obj.installEventFilter(self)
 
     def __open_film_page(self):
@@ -302,7 +312,7 @@ class FilmCard(QWidget):
         if event.type() == QEvent.Enter and source is self.poster_obj:
             self.poster_obj.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=20, xOffset=3, yOffset=2))
         elif event.type() == QEvent.Leave and source is self.poster_obj:
-            self.poster_obj.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=0, xOffset=0, yOffset=0))
+            self.poster_obj.setGraphicsEffect(None)
         elif event.type() == QEvent.MouseButtonPress and source is self.poster_obj:
             self.__open_film_page()
         return super().eventFilter(source, event)
@@ -314,37 +324,36 @@ class FilmCard(QWidget):
         self.layout().deleteLater()
         self.deleteLater()
 
-class SortButtons(QWidget):
-    def __init__(self):
+class ButtonsPanel(QWidget):
+    def __init__(self, *buttons: dict[str, str | QPushButton]):
         super().__init__()
-        self.value = 'desc'
-        self.value_bool = True
-        self.disabled_effect = QGraphicsColorizeEffect()
-        self.disabled_effect.setColor(QColor(0, 0, 0, 10))  
-        self.sort_asc = QPushButton('↑')
-        self.sort_asc.clicked.connect(self.__change_value)
-        self.sort_desc = QPushButton('↓')
-        self.sort_desc.clicked.connect(self.__change_value)
-        self.sort_desc.setDisabled(True)
-        self.sort_desc.setGraphicsEffect(self.disabled_effect)
         main_layout = QHBoxLayout()
-        main_layout.addWidget(self.sort_asc)
-        main_layout.addWidget(self.sort_desc)
         self.setLayout(main_layout)
+        self.buttons = list(buttons)
 
-    def __change_value(self):
-        self.value_bool = not self.value_bool
-        if self.value_bool:
-            self.sort_asc.setDisabled(False)
-            self.sort_desc.setDisabled(True)
-            self.sort_desc.setGraphicsEffect(self.disabled_effect)
-        else:
-            self.sort_asc.setDisabled(True)
-            self.sort_desc.setDisabled(False)
-            self.sort_asc.setGraphicsEffect(self.disabled_effect)
-        self.value = 'desc' if self.value_bool else 'asc'
+        for i, btn in enumerate(self.buttons):
+            self.buttons[i]['obj'] = QPushButton(btn.get('name'))
+            self.buttons[i].get('obj').setCursor(Qt.PointingHandCursor)
+            self.buttons[i].get('obj').clicked.connect(partial(self.__change_value, i))
+            main_layout.addWidget(self.buttons[i].get('obj'))
 
-class SearchWindow(QWidget):
+        self.value = buttons[0].get('value')
+        self.buttons[0].get('obj').setGraphicsEffect(QGraphicsColorizeEffect(color = QColor(0, 0, 0, 10)))
+        self.buttons[0].get('obj').setEnabled(False)
+
+    def __change_value(self, btn_index: int):
+        btn = self.buttons[btn_index]
+        self.value = btn.get('value')
+        for i, btn in enumerate(self.buttons):
+            if i == btn_index:
+                enabled = False
+                self.buttons[i].get('obj').setGraphicsEffect(QGraphicsColorizeEffect(color = QColor(0, 0, 0, 10)))
+            else:
+                enabled = True
+                self.buttons[i].get('obj').setGraphicsEffect(None)
+            self.buttons[i].get('obj').setEnabled(enabled)
+
+class SearchPage(QWidget):
     def __init__(self):
         super().__init__()
         self.sort_params = {'vote_average': 'рейтингу',
@@ -370,7 +379,7 @@ class SearchWindow(QWidget):
         self.sort_panel = ParameterPanel('', '', '', self.sort_params, True)
         self.sort_panel.setMinimumWidth(250)
         self.sort_panel.setObjectName('param-edit')
-        self.sort_asc_desc = SortButtons()
+        self.sort_asc_desc = ButtonsPanel({'name': '↑', 'value': 'desc'}, {'name': '↓', 'value': 'asc'})
 
         self.director_panel = ParameterPanel('', 'режиссёр', '', directors, True)
         self.country_panel = ParameterPanel('', 'страна', '', countries, True)
@@ -450,7 +459,11 @@ class SearchWindow(QWidget):
             self.results.film_cnt += 1
     
     def show_msg(self, msg: str):
-        print(msg)
+        msg_label = QLabel(msg)
+        msg_label.setAlignment(Qt.AlignCenter)
+        msg_label.setObjectName('param-label')
+        self.results.addWidget(msg_label)
+        self.results.setCurrentIndex(1)
 
     async def __search(self):
         release_date_gte, release_date_lte = self.date_edit.text().split('-')
@@ -486,8 +499,8 @@ class SearchWindow(QWidget):
 
     def start_search(self):
         self.search_bttn.setDisabled(True)
-        self.search_bttn.setGraphicsEffect(self.disabled_effect)
-        QTimer.singleShot(2000, lambda: self.effect_spot.setGraphicsEffect(self.disabled_effect) == self.search_bttn.setDisabled(False))
+        self.search_bttn.setGraphicsEffect(QGraphicsColorizeEffect(color=QColor(0, 0, 0, 10)))
+        QTimer.singleShot(2000, lambda: self.search_bttn.setGraphicsEffect(None) == self.search_bttn.setDisabled(False))
         
         self.clear_results(self.results.results_layout)
         self.results.results_layout.insertItem(0, QHBoxLayout())
@@ -548,6 +561,150 @@ class ResultsPanel(QStackedWidget):
             self.setCurrentIndex(self.page_num-1)
         print(value, max_value, self.page_num)
 
+class StatsPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.__init_ui()
+        self.__update_data()
+    
+    def __init_ui(self):
+        top_lo = QHBoxLayout()
+        self.usr_cnt_value = QLabel()
+        self.update_bttn = QPushButton('Обновить данные')
+        self.update_bttn.clicked.connect(self.__update_data)
+        self.update_bttn.setCursor(Qt.PointingHandCursor)
+        top_lo.addWidget(QLabel('Количество пользователей в системе:'))
+        top_lo.addWidget(self.usr_cnt_value)
+        top_lo.addStretch()
+        top_lo.addWidget(self.update_bttn, alignment=Qt.AlignRight)
+        
+        self.film_cnt_bttns = ButtonsPanel({'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
+        films_top_lo = QHBoxLayout()
+        films_top_lo.addWidget(self.film_cnt_bttns)
+        films_top_lo.addWidget(QLabel('количество фильмов'))
+
+        self.favorite_value = QLabel()
+        favorite_lo = QVBoxLayout()
+        favorite_lo.addWidget(QLabel('добавленных в понравившееся'))
+        favorite_lo.addWidget(self.favorite_value)
+        favorite_widget = QWidget()
+        favorite_widget.setLayout(favorite_lo)
+
+        self.watchlist_value = QLabel()
+        watchlist_lo = QVBoxLayout()
+        watchlist_lo.addWidget(QLabel('добавленных в список отложенного'))
+        watchlist_lo.addWidget(self.watchlist_value)
+        watchlist_widget = QWidget()
+        watchlist_widget.setLayout(watchlist_lo)
+
+        films_lo = QVBoxLayout()
+        films_lo.addLayout(films_top_lo)
+        films_lo.addWidget(favorite_widget)
+        films_lo.addWidget(watchlist_widget)
+        films_widget = QWidget()
+        films_widget.setLayout(films_lo)
+
+        self.query_cnt_bttns = ButtonsPanel({'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
+        query_top_lo = QHBoxLayout()
+        query_top_lo.addWidget(self.query_cnt_bttns)
+        query_top_lo.addWidget(QLabel('количество запросов'))
+
+        self.query_month_value = QLabel()
+        query_month_lo = QVBoxLayout()
+        query_month_lo.addWidget(QLabel('месяц'))
+        query_month_lo.addWidget(self.query_month_value)
+        query_month_widget = QWidget()
+        query_month_widget.setLayout(query_month_lo)
+
+        self.query_week_value = QLabel()
+        query_week_lo = QVBoxLayout()
+        query_week_lo.addWidget(QLabel('неделя'))
+        query_week_lo.addWidget(self.query_week_value)
+        query_week_widget = QWidget()
+        query_week_widget.setLayout(query_week_lo)
+
+        self.query_day_value = QLabel()
+        query_day_lo = QVBoxLayout()
+        query_day_lo.addWidget(QLabel('день'))
+        query_day_lo.addWidget(self.query_day_value)
+        query_day_widget = QWidget()
+        query_day_widget.setLayout(query_day_lo)
+
+        query_bot_lo = QHBoxLayout()
+        query_bot_lo.addWidget(query_month_widget)
+        query_bot_lo.addWidget(query_week_widget)
+        query_bot_lo.addWidget(query_day_widget)
+
+        queries_lo = QVBoxLayout()
+        queries_lo.addLayout(query_top_lo)
+        queries_lo.addLayout(query_bot_lo)
+        queries_widget = QWidget()
+        queries_widget.setLayout(queries_lo)
+
+        bot_left_lo = QVBoxLayout()
+        bot_left_lo.addWidget(films_widget)
+        bot_left_lo.addWidget(queries_widget)
+
+        self.users_genres_value = QLabel()
+        users_genres_lo = QVBoxLayout()
+        users_genres_lo.addWidget(QLabel('Жанры'))
+        users_genres_lo.addWidget(self.users_genres_value)
+
+        self.users_keywords_value = QLabel()
+        users_keywords_lo = QVBoxLayout()
+        users_keywords_lo.addWidget(QLabel('Ключевые слова'))
+        users_keywords_lo.addWidget(self.users_keywords_value)
+
+        self.users_directors_value = QLabel()
+        users_directors_lo = QVBoxLayout()
+        users_directors_lo.addWidget(QLabel('Режиссёры'))
+        users_directors_lo.addWidget(self.users_directors_value)
+
+        self.users_actors_value = QLabel()
+        users_actors_lo = QVBoxLayout()
+        users_actors_lo.addWidget(QLabel('Актёры'))
+        users_actors_lo.addWidget(self.users_actors_value)
+
+        users_genres_widget = QWidget()
+        users_genres_widget.setLayout(users_genres_lo)
+        users_keywords_widget = QWidget()
+        users_keywords_widget.setLayout(users_keywords_lo)
+        users_directors_widget = QWidget()
+        users_directors_widget.setLayout(users_directors_lo)
+        users_actors_widget = QWidget()
+        users_actors_widget.setLayout(users_actors_lo)
+
+        users_lo = QGridLayout()
+        users_lo.addWidget(users_genres_widget, 0, 0)
+        users_lo.addWidget(users_keywords_widget, 0, 1)
+        users_lo.addWidget(users_directors_widget, 1, 0)
+        users_lo.addWidget(users_actors_widget, 1, 1)
+
+        users_widget = QWidget()
+        users_widget.setLayout(users_lo)
+        self.user_bttns = ButtonsPanel({'name': 'месяц', 'value': 'month'}, {'name': 'неделю', 'value': 'week'}, {'name': 'день', 'value': 'day'})
+
+        users_filter_lo = QHBoxLayout()
+        users_filter_lo.addWidget(QLabel('запросов за'))
+        users_filter_lo.addWidget(self.user_bttns)
+
+        bot_right_lo = QVBoxLayout()
+        bot_right_lo.addWidget(QLabel('Пользовательские предпочтения на основе'))
+        bot_right_lo.addLayout(users_filter_lo)
+        bot_right_lo.addWidget(users_widget)
+
+        bot_lo = QHBoxLayout()
+        bot_lo.addLayout(bot_left_lo)
+        bot_lo.addLayout(bot_right_lo)
+
+        main_lo = QVBoxLayout()
+        main_lo.addLayout(top_lo)
+        main_lo.addLayout(bot_lo)
+        self.setLayout(main_lo)
+
+    def __update_data(self):
+        pass
+
 class AppWindow(QTabWidget):
     def __init__(self, **tabs):
         super().__init__()
@@ -576,13 +733,33 @@ class AppWindow(QTabWidget):
             margin: 15%;
             background-color: #f5f5f5;
         }
+        QScrollArea {
+            font-size: 15pt;
+            font-weight: bold;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+        }
         QPlainTextEdit {
-            font-size: 16pt;
+            font-size: 13pt;
+            font-weight: bold;
+            background-color: #fff;
+            border: 1px solid #ccc;
         }
         QLabel {
             font-size: 15pt;
             font-family: Calibri;
             font-weight: bold;
+        }
+        QLabel#param {
+            font-size: 13pt;
+            font-family: Calibri;
+            font-weight: bold;
+        }
+        QLabel#param-label {
+            font-size: 15pt;
+            font-weight: bold;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
         }
         QLineEdit {
             font-size: 16pt;
@@ -660,6 +837,6 @@ for iconame in ('rating', 'date', 'duration', 'revenue'):
     icons[iconame] = QSvgWidget(f'icons/{iconame}.svg')
     icons[iconame].renderer().setAspectRatioMode(Qt.KeepAspectRatio)
 
-app_window = AppWindow(Поиск = SearchWindow(), Фильм = FilmPage())
+app_window = AppWindow(Поиск = SearchPage(), Фильм = FilmPage(), Статистика = StatsPage())
 app_window.showMaximized()
 sys.exit(app.exec_())
