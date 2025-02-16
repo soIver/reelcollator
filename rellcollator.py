@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from PyQt5.QtSvg import QSvgWidget
 from data_provider import DataProvider
-from collections import deque
+from collections import deque, Counter
 from datetime import date
 from functools import partial
 
@@ -62,16 +62,16 @@ class ParameterPanel(QWidget):
         self.values = values
         self.one_value = one_value
         param_label = QLabel(name)
-        completer = QCompleter([value for value in values.values()])
-        completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
+        self.completer = QCompleter([value for value in values.values()])
+        self.completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
         self.param_edit = QLineEdit(default)
         self.param_edit.setMaximumWidth(300)
         self.param_edit.setPlaceholderText(placeholder)
-        self.param_edit.setCompleter(completer)
+        self.param_edit.setCompleter(self.completer)
         self.param_edit.setObjectName('param-edit')
         self.main_lo = QVBoxLayout()
         child_lo = QHBoxLayout()
-        completer.activated.connect(lambda: self.__update_checked_params(self.param_edit.text()))
+        self.completer.activated.connect(lambda: self.__update_checked_params(self.param_edit.text()))
         self.param_edit.returnPressed.connect(lambda: self.__update_checked_params(self.param_edit.text()))
         if not one_value:
             label_lo = QHBoxLayout()
@@ -151,6 +151,10 @@ class ParameterPanel(QWidget):
                 if key == id:
                     self.__update_checked_params(self.values[key])
                     break
+
+    def onClicked(self, event):
+        if self.completer:
+            self.completer.complete()
 
 class FilmPage(QWidget):
     def __init__(self, **fdata):
@@ -254,7 +258,6 @@ class FilmPage(QWidget):
         self.poster.setFixedHeight(self.height() - 150)
         self.poster.setFixedWidth(self.width() // 2 - 200)
 
-        
 class FilmCard(QWidget):
     def __init__(self, fid: int, title: str, poster: QPixmap, rating: str):
         super().__init__()
@@ -325,10 +328,11 @@ class FilmCard(QWidget):
         self.deleteLater()
 
 class ButtonsPanel(QWidget):
-    def __init__(self, *buttons: dict[str, str | QPushButton]):
+    def __init__(self, external_method, *buttons: dict[str, str | QPushButton]):
         super().__init__()
         main_layout = QHBoxLayout()
         self.setLayout(main_layout)
+        self.external_method = external_method
         self.buttons = list(buttons)
 
         for i, btn in enumerate(self.buttons):
@@ -352,6 +356,8 @@ class ButtonsPanel(QWidget):
                 enabled = True
                 self.buttons[i].get('obj').setGraphicsEffect(None)
             self.buttons[i].get('obj').setEnabled(enabled)
+        if self.external_method is not None:
+            self.external_method()
 
 class SearchPage(QWidget):
     def __init__(self):
@@ -379,7 +385,7 @@ class SearchPage(QWidget):
         self.sort_panel = ParameterPanel('', '', '', self.sort_params, True)
         self.sort_panel.setMinimumWidth(250)
         self.sort_panel.setObjectName('param-edit')
-        self.sort_asc_desc = ButtonsPanel({'name': '↑', 'value': 'desc'}, {'name': '↓', 'value': 'asc'})
+        self.sort_asc_desc = ButtonsPanel(None, {'name': '↑', 'value': 'desc'}, {'name': '↓', 'value': 'asc'})
 
         self.director_panel = ParameterPanel('', 'режиссёр', '', directors, True)
         self.country_panel = ParameterPanel('', 'страна', '', countries, True)
@@ -578,9 +584,9 @@ class StatsPage(QWidget):
         top_lo.addStretch()
         top_lo.addWidget(self.update_bttn, alignment=Qt.AlignRight)
         
-        self.film_cnt_bttns = ButtonsPanel({'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
+        self.film_bttns = ButtonsPanel(self.set_data, {'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
         films_top_lo = QHBoxLayout()
-        films_top_lo.addWidget(self.film_cnt_bttns)
+        films_top_lo.addWidget(self.film_bttns)
         films_top_lo.addWidget(QLabel('количество фильмов'))
 
         self.favorite_value = QLabel()
@@ -592,7 +598,7 @@ class StatsPage(QWidget):
 
         self.watchlist_value = QLabel()
         watchlist_lo = QVBoxLayout()
-        watchlist_lo.addWidget(QLabel('добавленных в список отложенного'))
+        watchlist_lo.addWidget(QLabel('добавленных в отложенное'))
         watchlist_lo.addWidget(self.watchlist_value)
         watchlist_widget = QWidget()
         watchlist_widget.setLayout(watchlist_lo)
@@ -604,9 +610,9 @@ class StatsPage(QWidget):
         films_widget = QWidget()
         films_widget.setLayout(films_lo)
 
-        self.query_cnt_bttns = ButtonsPanel({'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
+        self.query_bttns = ButtonsPanel(self.set_data, {'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
         query_top_lo = QHBoxLayout()
-        query_top_lo.addWidget(self.query_cnt_bttns)
+        query_top_lo.addWidget(self.query_bttns)
         query_top_lo.addWidget(QLabel('количество запросов'))
 
         self.query_month_value = QLabel()
@@ -682,7 +688,7 @@ class StatsPage(QWidget):
 
         users_widget = QWidget()
         users_widget.setLayout(users_lo)
-        self.user_bttns = ButtonsPanel({'name': 'месяц', 'value': 'month'}, {'name': 'неделю', 'value': 'week'}, {'name': 'день', 'value': 'day'})
+        self.user_bttns = ButtonsPanel(self.set_data, {'name': 'месяц', 'value': 'month'}, {'name': 'неделю', 'value': 'week'}, {'name': 'день', 'value': 'day'})
 
         users_filter_lo = QHBoxLayout()
         users_filter_lo.addWidget(QLabel('запросов за'))
@@ -703,7 +709,57 @@ class StatsPage(QWidget):
         self.setLayout(main_lo)
 
     def __update_data(self):
-        pass
+        data = data_provider.get_stats()
+        self.usr_cnt = data.get('usr_cnt', 0)
+        self.favorite = data.get('favorite', 0)
+        self.watchlist = data.get('watchlist', 0)
+        self.query_day = data.get('query_day', 0)
+        self.query_week = data.get('query_week', 0)
+        self.query_month = data.get('query_month', 0)
+        self.user_queries_day = data.get('user_queries_day', {})
+        self.user_queries_week = data.get('user_queries_week', {})
+        self.user_queries_month = data.get('user_queries_month', {})
+        self.set_data()
+
+    def set_data(self):
+        self.usr_cnt_value.setText(str(self.usr_cnt))
+        if self.usr_cnt == 0:
+            self.usr_cnt = 1
+        match self.film_bttns.value:
+            case 'all':
+                self.favorite_value.setText(str(self.favorite))
+                self.watchlist_value.setText(str(self.watchlist))
+            case 'avg':
+                self.favorite_value.setText(str(self.favorite // self.usr_cnt))
+                self.watchlist_value.setText(str(self.watchlist // self.usr_cnt))
+        match self.query_bttns.value:
+            case 'all':
+                self.query_day_value.setText(str(self.query_day))
+                self.query_week_value.setText(str(self.query_week))
+                self.query_month_value.setText(str(self.query_month))
+            case 'avg':
+                self.query_day_value.setText(str(self.query_day // self.usr_cnt))
+                self.query_week_value.setText(str(self.query_week // self.usr_cnt))
+                self.query_month_value.setText(str(self.query_month // self.usr_cnt))
+        match self.user_bttns.value:
+            case 'month':
+                user_queries = self.user_queries_month
+            case 'week':
+                user_queries = self.user_queries_week
+            case 'day':
+                user_queries = self.user_queries_day
+
+        most_common_params = {}
+        for param in ((self.users_genres_value, 'genres'), (self.users_keywords_value, 'keywords'), 
+                      (self.users_actors_value, 'actors'), (self.users_directors_value, 'directors')):
+            counter = Counter(user_queries.get(param[1]))
+            most_common_three = counter.most_common(3)
+            most_common_params[param[1]] = [item[0] for item in most_common_three]
+            if not most_common_params[param[1]]:
+                res = 'нет информации'
+            else:
+                res = ', '.join(most_common_params[param[1]])
+            param[0].setText(res)
 
 class AppWindow(QTabWidget):
     def __init__(self, **tabs):
@@ -713,107 +769,130 @@ class AppWindow(QTabWidget):
         self.__init_ui()
         for key, value in tabs.items():
           self.addTab(value, str(key))
-
-        for children in self.findChildren(QTabBar):
-            children.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=20, xOffset=-3, yOffset=2))
     
     def __init_ui(self):
-        self.setStyleSheet('''
-        QTabBar::tab {
-            background-color: #f0f0f0;
-            border: 1px solid #ccc;
+        color_edit = ' #2b2b2b'
+        color_edit_hover = ' #363636'
+        color_text = ' #dfdfdf'
+        color_bg = ' #121212'
+        color_bg_light = ' #1e1e1e'
+        color_border = ' #1b1b1b'
+        color_setting = ' #5e5e5e'
+        color_setting_hover = ' #6e6e6e'
+        color_btn = ' #4d8458'
+        color_btn_hover = ' #6ba476'
+        color_deletion = ' #d62828'
+        self.setStyleSheet(f'''
+        QTabBar::tab {{
+            background-color: {color_edit};
+            color: {color_text};
+            border: 1px solid {color_border};
             font-family: Calibri;
             font-size: 15pt;
             border-radius: 5%;
             margin: 10%;
             height: 50px;
             width: 200%
-        }
-        QTabBar::tab:selected {
-            margin: 15%;
-            background-color: #f5f5f5;
-        }
-        QScrollArea {
+        }}
+        QTabBar::tab:selected {{
+            margin-top: 15%;
+            background-color: {color_bg_light};
+        }}
+        QTabBar::tab:hover {{
+            background-color: {color_edit_hover};
+        }}
+        QTabBar::tab:selected:hover {{
+            margin-top: 15%;
+            background-color: {color_bg_light};
+        }}
+        QWidget {{
+            background-color: {color_bg};
+            border: none;
+        }}
+        QScrollArea {{
             font-size: 15pt;
             font-weight: bold;
-            background-color: #f0f0f0;
-            border: 1px solid #ccc;
-        }
-        QPlainTextEdit {
+            background-color: {color_edit};
+            border: 1px solid {color_border};
+        }}
+        QPlainTextEdit {{
             font-size: 13pt;
             font-weight: bold;
-            background-color: #fff;
-            border: 1px solid #ccc;
-        }
-        QLabel {
+            background-color: {color_edit};
+            border: 1px solid {color_border};
+        }}
+        QLabel {{
+            color: {color_text};
             font-size: 15pt;
             font-family: Calibri;
             font-weight: bold;
-        }
-        QLabel#param {
+        }}
+        QLabel#param {{
             font-size: 13pt;
             font-family: Calibri;
             font-weight: bold;
-        }
-        QLabel#param-label {
+        }}
+        QLabel#param-label {{
             font-size: 15pt;
             font-weight: bold;
-            background-color: #f0f0f0;
-            border: 1px solid #ccc;
-        }
-        QLineEdit {
+            background-color: {color_edit};
+            border: 1px solid {color_border};
+        }}
+        QLineEdit {{
+            color: {color_text};
             font-size: 16pt;
             font-family: Calibri;
-            background-color: #fff;
-            border: 1px solid #ccc;
+            background-color: {color_edit};
+            border: 1px solid {color_border};
             border-radius: 5%;
             padding: 5px;
-        }
-        QLineEdit#param-edit {
+        }}
+        QLineEdit#param-edit {{
             font-size: 15pt;
             font-weight: bold;
-            background-color: #f0f0f0;
+            background-color: {color_edit};
             border: none;
-        }
-        QLineEdit#title-edit {
+        }}
+        QLineEdit#title-edit {{
             font-size: 24pt;
             font-weight: bold;
-            background-color: #f0f0f0;
+            background-color: {color_edit};
             border: none;
-        }
-        QPushButton {
+        }}
+        QPushButton {{
             font-size: 16pt;
             font-family: Calibri;
-            background-color: #4CAF50;
-            color: #fff;
+            background-color: {color_btn};
+            color: #121212;
             padding: 10px 20px;
             border: none;
             border-radius: 5px;
-        }
-        QPushButton:hover {
-            background-color: #3e8e41;
-        }
-        QPushButton#settings {
-            background-color: #bbb;
-        }
-        QPushButton#settings:hover {
-            background-color: #888;
-        }
-        QPushButton#deletion {
-            background-color: #bbb;
+        }}
+        QPushButton:hover {{
+            background-color: {color_btn_hover};
+        }}
+        QPushButton#settings {{
+            background-color: {color_setting};
+        }}
+        QPushButton#settings:hover {{
+            background-color: {color_setting_hover};
+        }}
+        QPushButton#deletion {{
+            background-color: {color_setting};
             color: #000;
             border-radius: 20px;
             padding: 0;
             font-size: 20pt;
             font-weight: bold
-        }
-        QPushButton#deletion:hover {
-            background-color: #d62828;
-            color: #fff
-        }
-        QCompleter {
-            background-color: #888;
-        }
+        }}
+        QPushButton#deletion:hover {{
+            background-color: {color_deletion};
+            color: {color_edit}
+        }}
+        QCompleter {{
+            color: {color_text};
+            background-color: {color_setting_hover};
+        }}
         ''')
 
 data_provider = DataProvider()
@@ -822,7 +901,6 @@ keywords: dict[int, str] = {}
 directors: dict[int, str] = {}
 actors: dict[int, str] = {}
 countries: dict[str, str] = data_provider.get_countries()
-# data_provider.get_data(countries)
 
 for param in ('genres', 'keywords', 'directors', 'actors'):
     for row in data_provider.db_request(f'SELECT * FROM {param}'):

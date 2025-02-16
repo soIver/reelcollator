@@ -88,6 +88,21 @@ class DataProvider:
         pattern = re.compile(r'^[а-яА-ЯёЁ\s-]+$')
         return bool(pattern.match(text))
     
+    def get_stats(self) -> dict[str, int]:
+        usr_cnt = len(self.db_request(f'SELECT * FROM users'))
+        query_month = len(self.db_request(f"SELECT * FROM queries WHERE date > CURRENT_DATE - '1 month':: interval"))
+        query_week = len(self.db_request(f"SELECT * FROM queries WHERE date > CURRENT_DATE - '1 week':: interval"))
+        query_day = len(self.db_request(f"SELECT * FROM queries WHERE date > CURRENT_DATE - '1 day':: interval"))
+        favorite = len(self.db_request(f"SELECT * FROM favorite_movies"))
+        watchlist = len(self.db_request(f"SELECT * FROM watchlist"))
+
+        return {'usr_cnt': usr_cnt,
+                'query_month': query_month,
+                'query_week': query_week,
+                'query_day': query_day,
+                'favorite': favorite,
+                'watchlist': watchlist}
+
     def get_data(self, countries):
         burl = "https://api.themoviedb.org/3/trending/movie/week?language=ru-RU&page="
         for i in range(2, 5, 1):
