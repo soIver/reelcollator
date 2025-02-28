@@ -34,7 +34,7 @@ class ScaledLabel(QLabel):
         self.pixmap_original = None
         self.setScaledContents(False)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.setMaximumSize(600, 900)
+        self.setMaximumSize(600, 800)
         self.setAlignment(Qt.AlignLeft)
 
     def setPixmap(self, pixmap):
@@ -48,6 +48,21 @@ class ScaledLabel(QLabel):
         width = self.width()
         height = self.height()
         return self.pixmap_original.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    
+    def updateBorders(self, enabled):
+        color_text = '#000'
+        color_bg = '#f5f5f5'
+        borders = '4px solid #4d8458' if enabled else 'none'
+        self.setStyleSheet(f'''
+            QLabel {{
+            background-color: {color_bg};
+            color: {color_text};
+            font-size: 15pt;
+            font-family: Calibri;
+            font-weight: bold;
+            border-left: {borders};
+        }}''')
+
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -191,18 +206,18 @@ class FilmPage(QWidget):
         self.duration.sizeHint = lambda: QSize(247, 60)
         self.revenue = QLineEdit(str(self.revenue_txt))
         self.revenue.sizeHint = lambda: QSize(247, 60)
-        self.create_btn = QPushButton('Создать новую карточку фильма')
-        self.create_btn.setDisabled(True)
-        self.create_btn.setGraphicsEffect(QGraphicsColorizeEffect(color=QColor(0, 0, 0, 10)))
-        self.delete_btn = QPushButton('Удалить')
-        self.delete_btn.setDisabled(True)
-        self.delete_btn.setGraphicsEffect(QGraphicsColorizeEffect(color=QColor(0, 0, 0, 10)))
-        self.save_btn = QPushButton('Сохранить')
+        self.create_btn = CustomPushButton('Создать новую карточку фильма')
+        self.create_btn.setEnabled(False)
+        self.create_btn.updateBackgroundColor()
+        self.delete_btn = CustomPushButton('Удалить')
+        self.delete_btn.setEnabled(False)
+        self.delete_btn.updateBackgroundColor()
+        self.save_btn = CustomPushButton('Сохранить')
 
         self.title = QLineEdit(self.title_txt)
         self.title.setObjectName('title-edit')
         self.description = QPlainTextEdit(self.description_txt)
-        country_param = ParameterPanel('Страна:', '', self.release_country, countries, True)
+        country_param = ParameterPanel('Страна:', '', countries.get(self.release_country), countries, True)
         director_param = ParameterPanel('Режиссёр:', '', '', directors, True)
         actors_param = ParameterPanel('Актёры:', '', '', actors, False)
         genres_param = ParameterPanel('Жанры:', '', '', genres, False)
@@ -253,11 +268,6 @@ class FilmPage(QWidget):
 
         self.setLayout(layout)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.poster.setFixedHeight(self.height() - 150)
-        self.poster.setFixedWidth(self.width() // 2 - 200)
-
 class FilmCard(QWidget):
     def __init__(self, fid: int, title: str, poster: QPixmap, rating: str):
         super().__init__()
@@ -304,18 +314,18 @@ class FilmCard(QWidget):
         self.poster_obj.installEventFilter(self)
 
     def __open_film_page(self):
-        app_window.removeTab(1)
-        app_window.insertTab(1, FilmPage(fid = self.fid,
+        app_window.main_window.removeTab(1)
+        app_window.main_window.insertTab(1, FilmPage(fid = self.fid,
                                          title = self.title,
                                          poster = self.poster_copy,
                                          rating = self.rating), 'Фильм')
-        app_window.setCurrentIndex(1)
+        app_window.main_window.setCurrentIndex(1)
 
     def eventFilter(self, source, event):
         if event.type() == QEvent.Enter and source is self.poster_obj:
-            self.poster_obj.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=20, xOffset=3, yOffset=2))
+            self.poster_obj.updateBorders(True)
         elif event.type() == QEvent.Leave and source is self.poster_obj:
-            self.poster_obj.setGraphicsEffect(None)
+            self.poster_obj.updateBorders(False)
         elif event.type() == QEvent.MouseButtonPress and source is self.poster_obj:
             self.__open_film_page()
         return super().eventFilter(source, event)
@@ -328,36 +338,55 @@ class FilmCard(QWidget):
         self.deleteLater()
 
 class ButtonsPanel(QWidget):
-    def __init__(self, external_method, *buttons: dict[str, str | QPushButton]):
+    def __init__(self, external_method, *buttons: dict[str, str]):
         super().__init__()
         main_layout = QHBoxLayout()
         self.setLayout(main_layout)
         self.external_method = external_method
-        self.buttons = list(buttons)
+        self.buttons: list[dict[str, CustomPushButton]] = list(buttons)
 
         for i, btn in enumerate(self.buttons):
-            self.buttons[i]['obj'] = QPushButton(btn.get('name'))
+            self.buttons[i]['obj'] = CustomPushButton(btn.get('name'))
             self.buttons[i].get('obj').setCursor(Qt.PointingHandCursor)
             self.buttons[i].get('obj').clicked.connect(partial(self.__change_value, i))
             main_layout.addWidget(self.buttons[i].get('obj'))
 
         self.value = buttons[0].get('value')
-        self.buttons[0].get('obj').setGraphicsEffect(QGraphicsColorizeEffect(color = QColor(0, 0, 0, 10)))
         self.buttons[0].get('obj').setEnabled(False)
+        self.buttons[0].get('obj').updateBackgroundColor()
 
     def __change_value(self, btn_index: int):
         btn = self.buttons[btn_index]
         self.value = btn.get('value')
         for i, btn in enumerate(self.buttons):
-            if i == btn_index:
-                enabled = False
-                self.buttons[i].get('obj').setGraphicsEffect(QGraphicsColorizeEffect(color = QColor(0, 0, 0, 10)))
-            else:
-                enabled = True
-                self.buttons[i].get('obj').setGraphicsEffect(None)
+            enabled = False if i == btn_index else True
             self.buttons[i].get('obj').setEnabled(enabled)
+            self.buttons[i].get('obj').updateBackgroundColor()
         if self.external_method is not None:
             self.external_method()
+            
+class CustomPushButton(QPushButton):
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+
+    def updateBackgroundColor(self):
+        enabled = self.isEnabled()
+        color_text_light = '#303030'
+        color_setting = ' #5e5e5e'
+        color_btn = ' #4d8458' if enabled else color_setting
+        color_btn_hover = ' #6ba476'
+        self.setStyleSheet(f'''QPushButton {{
+            font-size: 16pt;
+            font-family: Calibri;
+            background-color: {color_btn};
+            color: {color_text_light};
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+        }}
+        QPushButton:hover {{
+            background-color: {color_btn_hover};
+        }}''')
 
 class SearchPage(QWidget):
     def __init__(self):
@@ -368,15 +397,11 @@ class SearchPage(QWidget):
         self.__initUI()
 
     def __initUI(self):
-        self.disabled_effect = QGraphicsColorizeEffect()
-        self.disabled_effect.setColor(QColor(0, 0, 0, 10))
-        self.effect_spot = QWidget()
-
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText('Введите название фильма')
         self.search_edit.setMinimumHeight(60)
 
-        self.search_bttn = QPushButton('Поиск')
+        self.search_bttn = CustomPushButton('Поиск')
         self.search_bttn.setMinimumHeight(60)
         self.search_bttn.clicked.connect(self.start_search)
         self.search_bttn.setCursor(Qt.PointingHandCursor)
@@ -504,9 +529,11 @@ class SearchPage(QWidget):
             self.show_msg('По Вашему запросу ничего не было найдено')
 
     def start_search(self):
-        self.search_bttn.setDisabled(True)
-        self.search_bttn.setGraphicsEffect(QGraphicsColorizeEffect(color=QColor(0, 0, 0, 10)))
-        QTimer.singleShot(2000, lambda: self.search_bttn.setGraphicsEffect(None) == self.search_bttn.setDisabled(False))
+        self.search_bttn.setEnabled(False)
+        self.search_bttn.updateBackgroundColor()
+        QTimer.singleShot(2500, lambda: self.search_bttn.setEnabled(True))
+        QTimer.singleShot(2501, lambda: self.search_bttn.updateBackgroundColor())
+
         
         self.clear_results(self.results.results_layout)
         self.results.results_layout.insertItem(0, QHBoxLayout())
@@ -524,10 +551,6 @@ class SearchPage(QWidget):
             self.results.removeWidget(widget)
             widget.deleteLater()
         self.results.add_page()
-    
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.results.results_widget.setFixedWidth(self.results.width()-10)
 
 class ResultsPanel(QStackedWidget):
     def __init__(self):
@@ -549,6 +572,7 @@ class ResultsPanel(QStackedWidget):
         self.results_widget = QWidget()
         self.results_widget.setLayout(self.results_layout)
         self.results_widget.setFixedWidth(self.width()-10)
+        self.results_widget.setFixedHeight(1923)
 
         self.cur_page = QScrollArea()
         self.cur_page.setWidgetResizable(True)
@@ -594,6 +618,7 @@ class StatsPage(QWidget):
         favorite_lo.addWidget(QLabel('добавленных в понравившееся'))
         favorite_lo.addWidget(self.favorite_value)
         favorite_widget = QWidget()
+        favorite_widget.setObjectName('stats')
         favorite_widget.setLayout(favorite_lo)
 
         self.watchlist_value = QLabel()
@@ -601,6 +626,7 @@ class StatsPage(QWidget):
         watchlist_lo.addWidget(QLabel('добавленных в отложенное'))
         watchlist_lo.addWidget(self.watchlist_value)
         watchlist_widget = QWidget()
+        watchlist_widget.setObjectName('stats')
         watchlist_widget.setLayout(watchlist_lo)
 
         films_lo = QVBoxLayout()
@@ -608,6 +634,7 @@ class StatsPage(QWidget):
         films_lo.addWidget(favorite_widget)
         films_lo.addWidget(watchlist_widget)
         films_widget = QWidget()
+        films_widget.setObjectName('stats')
         films_widget.setLayout(films_lo)
 
         self.query_bttns = ButtonsPanel(self.set_data, {'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
@@ -620,6 +647,7 @@ class StatsPage(QWidget):
         query_month_lo.addWidget(QLabel('месяц'))
         query_month_lo.addWidget(self.query_month_value)
         query_month_widget = QWidget()
+        query_month_widget.setObjectName('stats')
         query_month_widget.setLayout(query_month_lo)
 
         self.query_week_value = QLabel()
@@ -627,6 +655,7 @@ class StatsPage(QWidget):
         query_week_lo.addWidget(QLabel('неделя'))
         query_week_lo.addWidget(self.query_week_value)
         query_week_widget = QWidget()
+        query_week_widget.setObjectName('stats')
         query_week_widget.setLayout(query_week_lo)
 
         self.query_day_value = QLabel()
@@ -634,6 +663,7 @@ class StatsPage(QWidget):
         query_day_lo.addWidget(QLabel('день'))
         query_day_lo.addWidget(self.query_day_value)
         query_day_widget = QWidget()
+        query_day_widget.setObjectName('stats')
         query_day_widget.setLayout(query_day_lo)
 
         query_bot_lo = QHBoxLayout()
@@ -645,6 +675,7 @@ class StatsPage(QWidget):
         queries_lo.addLayout(query_top_lo)
         queries_lo.addLayout(query_bot_lo)
         queries_widget = QWidget()
+        queries_widget.setObjectName('stats')
         queries_widget.setLayout(queries_lo)
 
         bot_left_lo = QVBoxLayout()
@@ -672,12 +703,16 @@ class StatsPage(QWidget):
         users_actors_lo.addWidget(self.users_actors_value)
 
         users_genres_widget = QWidget()
+        users_genres_widget.setObjectName('stats')
         users_genres_widget.setLayout(users_genres_lo)
         users_keywords_widget = QWidget()
+        users_keywords_widget.setObjectName('stats')
         users_keywords_widget.setLayout(users_keywords_lo)
         users_directors_widget = QWidget()
+        users_directors_widget.setObjectName('stats')
         users_directors_widget.setLayout(users_directors_lo)
         users_actors_widget = QWidget()
+        users_actors_widget.setObjectName('stats')
         users_actors_widget.setLayout(users_actors_lo)
 
         users_lo = QGridLayout()
@@ -687,17 +722,20 @@ class StatsPage(QWidget):
         users_lo.addWidget(users_actors_widget, 1, 1)
 
         users_widget = QWidget()
+        users_widget.setObjectName('stats')
         users_widget.setLayout(users_lo)
         self.user_bttns = ButtonsPanel(self.set_data, {'name': 'месяц', 'value': 'month'}, {'name': 'неделю', 'value': 'week'}, {'name': 'день', 'value': 'day'})
 
         users_filter_lo = QHBoxLayout()
         users_filter_lo.addWidget(QLabel('запросов за'))
+        users_filter_lo.itemAt(users_filter_lo.count()-1).widget().setObjectName('stats')
         users_filter_lo.addWidget(self.user_bttns)
 
         bot_right_lo = QVBoxLayout()
-        bot_right_lo.addWidget(QLabel('Пользовательские предпочтения на основе'))
+        bot_right_lo.addWidget(QLabel('Пользовательские предпочтения на основе'), alignment=Qt.AlignTop)
+        bot_right_lo.itemAt(bot_right_lo.count()-1).widget().setObjectName('stats')
         bot_right_lo.addLayout(users_filter_lo)
-        bot_right_lo.addWidget(users_widget)
+        bot_right_lo.addWidget(users_widget, alignment=Qt.AlignTop)
 
         bot_lo = QHBoxLayout()
         bot_lo.addLayout(bot_left_lo)
@@ -761,21 +799,21 @@ class StatsPage(QWidget):
                 res = ', '.join(most_common_params[param[1]])
             param[0].setText(res)
 
-class AppWindow(QTabWidget):
+class MainWindow(QTabWidget):
     def __init__(self, **tabs):
         super().__init__()
-        self.setWindowTitle("Reelcollator")
-        self.setMinimumSize(720, 480)
+        
         self.__init_ui()
         for key, value in tabs.items():
           self.addTab(value, str(key))
     
     def __init_ui(self):
-        color_edit = ' #2b2b2b'
-        color_edit_hover = ' #363636'
-        color_text = ' #dfdfdf'
-        color_bg = ' #121212'
-        color_bg_light = ' #1e1e1e'
+        color_edit = '#eaeaea'
+        color_edit_hover = '#78938a'
+        color_text = '#000'
+        color_text_light = '#303030'
+        color_bg = '#f5f5f5'
+        color_bg_light = ' #fff'
         color_border = ' #1b1b1b'
         color_setting = ' #5e5e5e'
         color_setting_hover = ' #6e6e6e'
@@ -809,6 +847,12 @@ class AppWindow(QTabWidget):
             background-color: {color_bg};
             border: none;
         }}
+        QWidget#stats {{
+            background-color: {color_edit};
+            border: none;
+            border: 1px solid {color_border};
+            border-radius: 5%;
+        }}
         QScrollArea {{
             font-size: 15pt;
             font-weight: bold;
@@ -820,12 +864,22 @@ class AppWindow(QTabWidget):
             font-weight: bold;
             background-color: {color_edit};
             border: 1px solid {color_border};
+            border-radius: 5%;
         }}
         QLabel {{
+            background-color: {color_bg};
             color: {color_text};
             font-size: 15pt;
             font-family: Calibri;
             font-weight: bold;
+        }}
+        QLabel#stats {{
+            background-color: {color_bg};
+            color: {color_text_light};
+            font-size: 18pt;
+            font-family: Calibri;
+            font-weight: bold;
+            border: none;
         }}
         QLabel#param {{
             font-size: 13pt;
@@ -857,13 +911,14 @@ class AppWindow(QTabWidget):
             font-size: 24pt;
             font-weight: bold;
             background-color: {color_edit};
-            border: none;
+            border: 1px solid {color_border};
+            border-radius: 5%;
         }}
         QPushButton {{
             font-size: 16pt;
             font-family: Calibri;
             background-color: {color_btn};
-            color: #121212;
+            color: {color_text_light};
             padding: 10px 20px;
             border: none;
             border-radius: 5px;
@@ -895,19 +950,62 @@ class AppWindow(QTabWidget):
         }}
         ''')
 
+class AppWindow(QGraphicsView):
+    def __init__(self):
+        super().__init__()
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setWindowTitle("Reelcollator")
+        self.setMinimumSize(720, 480)
+        self.main_window = MainWindow(Поиск = SearchPage(), Фильм = FilmPage(), Статистика = StatsPage())
+        scene = QGraphicsScene()
+        self.awidth = QDesktopWidget().width() - 20
+        self.aheight = QDesktopWidget().height() - 130
+        self.aspect_ratio = self.awidth / self.aheight
+        self.is_fullscreen = False
+        scene_widget = scene.addWidget(self.main_window)
+        scene_widget.setGeometry(QRectF(0, 0, self.awidth, self.aheight))
+        self.setScene(scene)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def resizeEvent(self, event: QResizeEvent):
+        super().resizeEvent(event)
+
+        if self.is_fullscreen:
+            return
+        new_size = event.size()
+        expected_height = int(new_size.width() / self.aspect_ratio)
+        if new_size.height() != expected_height:
+            self.setFixedHeight(expected_height)
+
+        self.fitInView(QRectF(0, 0, 1900, 1050), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def changeEvent(self, event):
+        if event.type() == event.WindowStateChange:
+            if self.windowState() & Qt.WindowFullScreen:
+                self.is_fullscreen = True
+            else:
+                self.is_fullscreen = False
+                self.setFixedHeight(int(self.width() / self.aspect_ratio))
+
+        super().changeEvent(event)
+
 data_provider = DataProvider()
 genres: dict[int, str] = {}
 keywords: dict[int, str] = {}
 directors: dict[int, str] = {}
 actors: dict[int, str] = {}
-countries: dict[str, str] = data_provider.get_countries()
+countries: dict[str, str] = {}
 
-for param in ('genres', 'keywords', 'directors', 'actors'):
-    for row in data_provider.db_request(f'SELECT * FROM {param}'):
-        if param in ('genres', 'keywords'):
-            locals()[param][row.get('id')] = row.get('name')
-        else:
-            locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])
+data_free = False
+if not data_free:
+    countries: dict[str, str] = data_provider.get_countries()
+    for param in ('genres', 'keywords', 'directors', 'actors'):
+        for row in data_provider.db_request(f'SELECT * FROM {param}'):
+            if param in ('genres', 'keywords'):
+                locals()[param][row.get('id')] = row.get('name')
+            else:
+                locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])
 
 app = QApplication(sys.argv)
 icons = {}
@@ -915,6 +1013,6 @@ for iconame in ('rating', 'date', 'duration', 'revenue'):
     icons[iconame] = QSvgWidget(f'icons/{iconame}.svg')
     icons[iconame].renderer().setAspectRatioMode(Qt.KeepAspectRatio)
 
-app_window = AppWindow(Поиск = SearchPage(), Фильм = FilmPage(), Статистика = StatsPage())
+app_window = AppWindow()
 app_window.showMaximized()
 sys.exit(app.exec_())
