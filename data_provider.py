@@ -1,5 +1,6 @@
 from dns_client.adapters.requests import DNSClientSession
 from contextlib import closing
+from psycopg2 import sql
 import psycopg2, psycopg2.extras, re, requests, xml.etree.ElementTree as ET
 
 base_url = "https://api.themoviedb.org/3!/movie?"
@@ -29,33 +30,8 @@ class DataProvider:
         print(request)
         return self.session.get(url=request.strip('&'), headers=headers).json()['results']
     
-    def discover(self, params: dict[str, list[str]]):
-        request = base_url.replace('!', '/discover')
-        for key, value in params.items():
-            request += f'{key}='
-            request += ','.join(value) + '&'
-        print(request)
-        return self.session.get(url=request.strip('&'), headers=headers).json()['results']
-         
-    def api_request(self, search_params: dict[str, list[str]] = None, discover_params: dict[str, list[str]] = None):
-        discover_response: list[dict] = []
-        search_response: list[dict] = []
-        if search_params:
-            search_response = self.search(search_params)
-        if discover_params:
-            discover_response = self.discover(discover_params)
-        if discover_response and search_response:
-            response = [film for film in discover_response if film in search_response]
-        elif discover_response: 
-            response = discover_response
-        elif search_response: 
-            response = search_response
-        else: 
-            response = False
-        return response
-    
     def get_image_bin(self, image_path: str):
-        url = f'https://image.tmdb.org/t/p/original{image_path}'
+        url = image_path
         response = self.session.get(url, stream=True, timeout=20)
         return response.content
             
@@ -71,13 +47,108 @@ class DataProvider:
                 countries[country_id] = country_name
         return countries
 
-    def db_request(self, query: str, get: bool = True):
+    def search_movies(self, 
+        genres_included=None, genres_excluded=None, keywords_included=None, 
+        keywords_excluded=None, actors=None, director=None, title_part=None, 
+        country=None, release_date_gte=None, release_date_lte=None,
+        order_by=None, order_dir='ASC'):
+
+        query = sql.SQL("""
+        SELECT m.id, m.name, m.release_date, m.release_country, m.poster_link, m.rating, m.revenue, m.runtime, m.director, m.overview,
+            array_agg(DISTINCT a.id) AS actors,
+            array_agg(DISTINCT g.id) AS genres,
+            array_agg(DISTINCT k.id) AS keywords
+        FROM movies m
+        LEFT JOIN movies_actors ma ON m.id = ma.movie_id
+        LEFT JOIN actors a ON ma.actor_id = a.id
+        LEFT JOIN movies_genres mg ON m.id = mg.movie_id
+        LEFT JOIN genres g ON mg.genre_id = g.id
+        LEFT JOIN movies_keywords mk ON m.id = mk.movie_id
+        LEFT JOIN keywords k ON mk.keyword_id = k.id
+        WHERE 1=1
+        """)
+
+        conditions = []
+        if genres_included:
+            conditions.append(sql.SQL("m.id IN (SELECT movie_id FROM movies_genres WHERE genre_id IN %s)"))
+        if genres_excluded:
+            conditions.append(sql.SQL("m.id NOT IN (SELECT movie_id FROM movies_genres WHERE genre_id IN %s)"))
+        if keywords_included:
+            conditions.append(sql.SQL("m.id IN (SELECT movie_id FROM movies_keywords WHERE keyword_id IN %s)"))
+        if keywords_excluded:
+            conditions.append(sql.SQL("m.id NOT IN (SELECT movie_id FROM movies_keywords WHERE keyword_id IN %s)"))
+        if actors:
+            conditions.append(sql.SQL("m.id IN (SELECT movie_id FROM movies_actors WHERE actor_id IN %s)"))
+        if director:
+            conditions.append(sql.SQL("m.director = %s"))
+        if title_part:
+            conditions.append(sql.SQL("m.name ILIKE %s"))
+        if country:
+            conditions.append(sql.SQL("m.release_country = %s"))
+        if release_date_gte and release_date_lte:
+            conditions.append(sql.SQL("m.release_date BETWEEN %s AND %s"))
+
+        if conditions:
+            query += sql.SQL(" AND ") + sql.SQL(" AND ").join(conditions)
+
+        query += sql.SQL(" GROUP BY m.id")
+        query += sql.SQL(f" ORDER BY {order_by if order_by else 'm.release_date'} {order_dir}")
+
+        # Подготовка параметров для запроса
+        params = []
+        if genres_included:
+            params.append(tuple(genres_included))
+        if genres_excluded:
+            params.append(tuple(genres_excluded))
+        if keywords_included:
+            params.append(tuple(keywords_included))
+        if keywords_excluded:
+            params.append(tuple(keywords_excluded))
+        if actors:
+            params.append(tuple(actors))
+        if director:
+            params.append(director)
+        if title_part:
+            params.append(f'%{title_part}%')
+        if country:
+            params.append(country)
+        if release_date_gte and release_date_lte:
+            params.extend([release_date_gte, release_date_lte])
+
+        # Выполнение запроса
+        rows = self.db_request(query, params=params)
+
+        # Формирование результата
+        movies = []
+        for row in rows:
+            movie = {
+                'id': row['id'],
+                'name': row['name'],
+                'release_date': row['release_date'],
+                'release_country': row['release_country'],
+                'poster_link': row['poster_link'],
+                'rating': round(row['rating'], 1),
+                'revenue': row['revenue'],
+                'director': row['director'],
+                'overview': row['overview'],
+                'actors': row['actors'],
+                'genres': row['genres'],
+                'keywords': row['keywords']
+            }
+            movies.append(movie)
+        print(movies)
+        return movies
+
+    def db_request(self, query: str, get: bool = True, params = None):
         result = None
         with closing(psycopg2.connect(dbname=dbname, user=user, password=password, host=host)) as conn:
             conn.autocommit = True
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                 try:
-                    cursor.execute(query)
+                    if params:
+                        cursor.execute(query, params)
+                    else:
+                        cursor.execute(query)
                 except psycopg2.errors.UniqueViolation:
                     pass
                 if get:

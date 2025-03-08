@@ -1,4 +1,4 @@
-import sys, asyncio
+import sys, asyncio, json
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
@@ -9,18 +9,16 @@ from datetime import date
 from functools import partial
 
 class ImageLoader(QRunnable):
-    def __init__(self, fid, poster_path, title, rating, callback):
+    def __init__(self, movie_id, poster_link, callback: QObject):
         super().__init__()
-        self.fid = fid
-        self.poster_path = poster_path
-        self.title = title
-        self.rating = rating
+        self.poster_link = poster_link
+        self.movie_id = movie_id
         self.callback = callback
-
+    
     def run(self):
-        image_data = data_provider.get_image_bin(self.poster_path)
+        image_data = data_provider.get_image_bin(self.poster_link)
         pixmap = self.__pixmap_from_bytes(image_data)
-        QMetaObject.invokeMethod(self.callback, "add_film_card", Qt.QueuedConnection, Q_ARG(int, self.fid), Q_ARG(QPixmap, pixmap), Q_ARG(str, self.title), Q_ARG(str, self.rating))
+        QMetaObject.invokeMethod(self.callback, "add_film_card", Qt.QueuedConnection, Q_ARG(int, self.movie_id), Q_ARG(QPixmap, pixmap))
 
     def __pixmap_from_bytes(self, image_bin):
         byte_array = QByteArray(image_bin)
@@ -63,12 +61,6 @@ class ScaledLabel(QLabel):
             border-left: {borders};
         }}''')
 
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.pixmap_original:
-            self.setPixmap(self.pixmap_original)
-
 class ParameterPanel(QWidget):
     def __init__(self, name: str, placeholder: str, default: str, values: dict[str | int, str], one_value: bool):
         super().__init__()
@@ -78,7 +70,7 @@ class ParameterPanel(QWidget):
         self.one_value = one_value
         param_label = QLabel(name)
         self.completer = QCompleter([value for value in values.values()])
-        self.completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
+        self.completer.setCompletionMode(QCompleter.InlineCompletion)
         self.param_edit = QLineEdit(default)
         self.param_edit.setMaximumWidth(300)
         self.param_edit.setPlaceholderText(placeholder)
@@ -100,7 +92,7 @@ class ParameterPanel(QWidget):
         child_lo.addStretch()
         self.main_lo.addLayout(child_lo)
         self.setLayout(self.main_lo)
-
+    
     def __update_checked_params(self, text: str):
         for key in self.values.keys():
             if self.values[key] == text:
@@ -167,28 +159,19 @@ class ParameterPanel(QWidget):
                     self.__update_checked_params(self.values[key])
                     break
 
-    def onClicked(self, event):
-        if self.completer:
-            self.completer.complete()
-
 class FilmPage(QWidget):
-    def __init__(self, **fdata):
+    def __init__(self, movie_data: dict[str] = {}, poster: QPixmap = None):
         super().__init__()
-        self.fid = fdata.get('fid', '')
-        self.poster_img = fdata.get('poster', '')
-        self.title_txt = fdata.get('title', '')
-        self.description_txt = fdata.get('description', '')
-        self.rating_txt = fdata.get('rating', '')
-        self.poster_path = ''
-        details = {}
-        if self.fid:
-            details = data_provider.details(self.fid)
-        self.release_date = details.get('release_date', '')
-        self.revenue_txt = details.get('revenue', '')
-        self.runtime = details.get('runtime', '')
-        self.description_txt = details.get('overview', '')
-        self.release_country = details.get('origin_country', [''])[0]
-        self.poster_path = f'https://image.tmdb.org/t/p/original{details.get('poster_path', '')}'
+        self.fid = movie_data.get('id', '')
+        self.poster_img = poster
+        self.title_txt = movie_data.get('name', '')
+        self.description_txt = movie_data.get('overview', '')
+        self.rating_txt = str(movie_data.get('rating', 0))
+        self.poster_path = movie_data.get('poster_link', '')
+        self.release_date = str(movie_data.get('release_date', ''))
+        self.revenue_txt = str(movie_data.get('revenue', 0))
+        self.runtime = str(movie_data.get('runtime', 0))
+        self.release_country = movie_data.get('origin_country', '')
         self.__init_ui()
 
     def __init_ui(self):
@@ -199,13 +182,13 @@ class FilmPage(QWidget):
             
         self.poster_link = QLineEdit(self.poster_path)
         self.rating = QLabel(text=self.rating_txt)
-        self.rating.sizeHint = lambda: QSize(247, 60)
+        self.rating.sizeHint = lambda: QSize(50, 60)
         self.date = QLineEdit(self.release_date)
-        self.date.sizeHint = lambda: QSize(247, 60)
+        self.date.sizeHint = lambda: QSize(200, 60)
         self.duration = QLineEdit(str(self.runtime))
-        self.duration.sizeHint = lambda: QSize(247, 60)
+        self.duration.sizeHint = lambda: QSize(150, 60)
         self.revenue = QLineEdit(str(self.revenue_txt))
-        self.revenue.sizeHint = lambda: QSize(247, 60)
+        self.revenue.sizeHint = lambda: QSize(150, 60)
         self.create_btn = CustomPushButton('Создать новую карточку фильма')
         self.create_btn.setEnabled(False)
         self.create_btn.updateBackgroundColor()
@@ -240,12 +223,12 @@ class FilmPage(QWidget):
         botside_l = QHBoxLayout()
         botside_l.addWidget(icons['rating'])
         botside_l.addWidget(self.rating)
+        botside_l.addWidget(icons['revenue'])
+        botside_l.addWidget(self.revenue)
         botside_l.addWidget(icons['date'])
         botside_l.addWidget(self.date)
         botside_l.addWidget(icons['duration'])
         botside_l.addWidget(self.duration)
-        # botside_l.addWidget(icons['revenue'])
-        # botside_l.addWidget(self.revenue)
 
         leftside = QVBoxLayout()
         leftside.addWidget(self.poster, alignment=Qt.AlignHCenter)
@@ -269,35 +252,39 @@ class FilmPage(QWidget):
         self.setLayout(layout)
 
 class FilmCard(QWidget):
-    def __init__(self, fid: int, title: str, poster: QPixmap, rating: str):
+    def __init__(self, movie_data: dict[str], poster: QPixmap):
         super().__init__()
-        self.fid = fid
-        self.title = title
+        self.movie_data = movie_data
         self.poster = poster
         self.poster_copy = poster
-        self.rating = rating
+        self.title = movie_data.get('name')
+        self.rating = movie_data.get('rating')
         self.__init_ui()
 
     def __init_ui(self):
         layout = QVBoxLayout(self)
 
         self.poster_obj = ScaledLabel()
+        self.poster_obj.setMaximumSize(600, 500)
         self.poster_obj.setPixmap(self.poster)
         self.poster_obj.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.poster_obj.setFixedHeight(500)
 
-        self.title_obj = QLabel(text=self.title)
+        if len(self.title) > 16:
+            title_label = f'{self.title[:16]}...'
+        else:
+            title_label = self.title
+        self.title_obj = QLabel(text=title_label)
         self.title_obj.setStyleSheet('font-size: 18pt')
         self.title_obj.setWordWrap(True)
 
-        if float(self.rating) > 0:
+        if self.rating > 0:
             font_size = 18
-            text = self.rating
+            text = str(self.rating)
         else:
             font_size = 12
             text = 'нет\nоценок'
         self.rating_obj = QLabel(text=text)
-        bg_color = f'rgb({255 - int(float(self.rating)*20)}, {int(float(self.rating)*20)}, 0)' if float(self.rating) > 0 else 'gray'
+        bg_color = f'rgb({255 - int(self.rating)*20}, {int(self.rating)*20}, 0)' if self.rating > 0 else 'gray'
         self.rating_obj.setStyleSheet(f'font-size: {font_size}pt; padding-left: 5px; padding-right: 5px; border: 2px solid #555; background-color: {bg_color}; border-radius: 5px; color: #fff')
         self.rating_obj.setMaximumSize(100, 60)
 
@@ -315,10 +302,8 @@ class FilmCard(QWidget):
 
     def __open_film_page(self):
         app_window.main_window.removeTab(1)
-        app_window.main_window.insertTab(1, FilmPage(fid = self.fid,
-                                         title = self.title,
-                                         poster = self.poster_copy,
-                                         rating = self.rating), 'Фильм')
+        app_window.main_window.insertTab(1, FilmPage(self.movie_data,
+                                            poster = self.poster_copy), 'Фильм')
         app_window.main_window.setCurrentIndex(1)
 
     def eventFilter(self, source, event):
@@ -372,7 +357,7 @@ class CustomPushButton(QPushButton):
     def updateBackgroundColor(self):
         enabled = self.isEnabled()
         color_text_light = '#303030'
-        color_setting = ' #5e5e5e'
+        color_setting = ' #7d7d7d'
         color_btn = ' #4d8458' if enabled else color_setting
         color_btn_hover = ' #6ba476'
         self.setStyleSheet(f'''QPushButton {{
@@ -391,8 +376,8 @@ class CustomPushButton(QPushButton):
 class SearchPage(QWidget):
     def __init__(self):
         super().__init__()
-        self.sort_params = {'vote_average': 'рейтингу',
-                            'primary_release_date': 'дате выхода',
+        self.sort_params = {'rating': 'рейтингу',
+                            'release_date': 'дате выхода',
                             'revenue': 'сумме сборов'}
         self.__initUI()
 
@@ -410,7 +395,7 @@ class SearchPage(QWidget):
         self.sort_panel = ParameterPanel('', '', '', self.sort_params, True)
         self.sort_panel.setMinimumWidth(250)
         self.sort_panel.setObjectName('param-edit')
-        self.sort_asc_desc = ButtonsPanel(None, {'name': '↑', 'value': 'desc'}, {'name': '↓', 'value': 'asc'})
+        self.sort_asc_desc = ButtonsPanel(None, {'name': '↑', 'value': 'DESC'}, {'name': '↓', 'value': 'ASC'})
 
         self.director_panel = ParameterPanel('', 'режиссёр', '', directors, True)
         self.country_panel = ParameterPanel('', 'страна', '', countries, True)
@@ -455,6 +440,7 @@ class SearchPage(QWidget):
         self.v_layout.addStretch()
         
         self.results = ResultsPanel()
+        self.show_msg('')
 
         main_layout = QHBoxLayout()
         main_layout.addLayout(self.v_layout)
@@ -464,16 +450,17 @@ class SearchPage(QWidget):
         main_layout.setStretch(1, 3)
         self.setLayout(main_layout)
 
-    @pyqtSlot(int, QPixmap, str, str)
-    def add_film_card(self, fid, pixmap, title, rating):
-        result = FilmCard(fid, title, pixmap, rating)
-        self.results.results_layout.itemAt(self.results.results_layout.count()-2).insertWidget(self.results.current_col_result, result, alignment = Qt.AlignTop | Qt.AlignLeft)
-        self.results.results_layout.itemAt(self.results.results_layout.count()-2).addStretch()
-        self.results.current_col_result += 1
-        if self.results.current_col_result > 2:
-            self.results.current_row_result += 1
-            self.results.current_col_result = 0
-            self.results.results_layout.insertLayout(self.results.results_layout.count()-1, QHBoxLayout())
+    @pyqtSlot(int, QPixmap)
+    def add_film_card(self, movie_id: int, pixmap: QPixmap):
+        if not pixmap.isNull():
+            result = FilmCard(self.movies.get(movie_id), pixmap)
+            self.results.results_layout.itemAt(self.results.results_layout.count()-2).insertWidget(self.results.current_col_result, result, alignment = Qt.AlignTop | Qt.AlignLeft)
+            self.results.results_layout.itemAt(self.results.results_layout.count()-2).addStretch()
+            self.results.current_col_result += 1
+            if self.results.current_col_result > 2:
+                self.results.current_row_result += 1
+                self.results.current_col_result = 0
+                self.results.results_layout.insertLayout(self.results.results_layout.count()-1, QHBoxLayout())
         self.process_next_image()
 
     def process_next_image(self):
@@ -484,8 +471,8 @@ class SearchPage(QWidget):
                 self.results.current_row_result = 0
                 self.results.add_page()
 
-            fid, poster_path, title, rating = self.image_queue.popleft()
-            loader = ImageLoader(fid, poster_path, title, rating, self)
+            movie_id, poster_link = self.image_queue.popleft()
+            loader = ImageLoader(movie_id, poster_link, self)
             QThreadPool.globalInstance().start(loader)
             self.results.film_cnt += 1
     
@@ -503,27 +490,28 @@ class SearchPage(QWidget):
         release_date_lte.reverse()
         if int(''.join(release_date_gte)) > int(''.join(release_date_lte)):
             self.show_msg('Первая дата интервала выхода фильма не может быть больше второй')
-        search_params = {'page': [str(self.results.page_cnt)], 'include_adult': ['false'], 'language': ['ru-RU'], 
-                        'query': [self.search_edit.text()]} if self.search_edit.text() else None
-        discover_params = {'page': [str(self.results.page_cnt)], 'include_adult': ['false'], 'language': ['ru-RU'],
-                        'with_genres': [str(id) for id in self.genres_panel.checked_params.keys()],
-                        'without_genres': [str(id) for id in self.genres_panel_no.checked_params.keys()],
-                        'with_keywords': [str(id) for id in self.keywords_panel.checked_params.keys()],
-                        'without_keywords': [str(id) for id in self.keywords_panel_no.checked_params.keys()],
-                        'with_people': [str(id) for id in self.actors_panel.checked_params.keys()] + [str(id) for id in self.director_panel.checked_params.keys()],
-                        'with_origin_country': [str(id) for id in self.country_panel.checked_params.keys()],
-                        'release_date.gte': ['-'.join(release_date_gte)],
-                        'release_date.lte': ['-'.join(release_date_lte)],
-                        'sort_by': [f'{id}.{self.sort_asc_desc.value}' for id in self.sort_panel.checked_params.keys()]}
-        response = data_provider.api_request(search_params, discover_params)
 
-        if response:
-            for film in response:
-                fid = film['id']
-                title = film['title']
-                rating = str(round(float(film['vote_average']), 1))
-                poster_path = film['poster_path']
-                self.image_queue.append((fid, poster_path, title, rating))
+        movies = data_provider.search_movies(
+            genres_included=[str(id) for id in self.genres_panel.checked_params.keys()],
+            genres_excluded=[str(id) for id in self.genres_panel_no.checked_params.keys()],
+            keywords_included=[str(id) for id in self.keywords_panel.checked_params.keys()],
+            keywords_excluded=[str(id) for id in self.keywords_panel_no.checked_params.keys()],
+            actors=[str(id) for id in self.actors_panel.checked_params.keys()],
+            director=[str(id) for id in self.director_panel.checked_params.keys()],
+            title_part=self.search_edit.text(),
+            country=[str(id) for id in self.country_panel.checked_params.keys()],
+            release_date_gte='-'.join(release_date_gte),
+            release_date_lte='-'.join(release_date_lte),
+            order_by=[str(id) for id in self.sort_panel.checked_params.keys()],
+            order_dir=self.sort_asc_desc.value
+        )
+        self.movies = {}
+        if movies:
+            for movie in movies:
+                movie_id = movie.get('id')
+                movie_poster = movie.get('poster_link')
+                self.movies[movie_id] = movie
+                self.image_queue.append((movie_id, movie_poster))
             self.process_next_image()
         else: 
             self.show_msg('По Вашему запросу ничего не было найдено')
@@ -534,7 +522,6 @@ class SearchPage(QWidget):
         QTimer.singleShot(2500, lambda: self.search_bttn.setEnabled(True))
         QTimer.singleShot(2501, lambda: self.search_bttn.updateBackgroundColor())
 
-        
         self.clear_results(self.results.results_layout)
         self.results.results_layout.insertItem(0, QHBoxLayout())
         self.image_queue = deque()
@@ -589,7 +576,6 @@ class ResultsPanel(QStackedWidget):
         elif value == max_value and self.page_num < self.page_cnt:
             self.page_num += 1
             self.setCurrentIndex(self.page_num-1)
-        print(value, max_value, self.page_num)
 
 class StatsPage(QWidget):
     def __init__(self):
@@ -815,7 +801,7 @@ class MainWindow(QTabWidget):
         color_bg = '#f5f5f5'
         color_bg_light = ' #fff'
         color_border = ' #1b1b1b'
-        color_setting = ' #5e5e5e'
+        color_setting = ' #7d7d7d'
         color_setting_hover = ' #6e6e6e'
         color_btn = ' #4d8458'
         color_btn_hover = ' #6ba476'
@@ -971,8 +957,6 @@ class AppWindow(QGraphicsView):
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
 
-        if self.is_fullscreen:
-            return
         new_size = event.size()
         expected_height = int(new_size.width() / self.aspect_ratio)
         if new_size.height() != expected_height:
