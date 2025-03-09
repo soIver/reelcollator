@@ -127,11 +127,86 @@ class DataProvider:
         return movies
     
     def save_movie(self, movie_data: dict):
-        query = sql.SQL('''UPDATE movies SET name = %s, release_date = %s, release_country = %s, poster_link = %s, rating = %s, revenue = %s, runtime = %s, director = %s, overview = %s
-        WHERE id = %s''')
-        params = [movie_data.get(param) for param in ('name', 'release_date', 'release_country', 'poster_link', 'rating', 'revenue', 'runtime', 'director', 'overview', 'id')]
+        query = sql.SQL('''
+            UPDATE movies 
+            SET name = %s, release_date = %s, release_country = %s, poster_link = %s, 
+                rating = %s, revenue = %s, runtime = %s, director = %s, overview = %s
+            WHERE id = %s
+        ''')
+        params = [
+            movie_data.get('name'),
+            movie_data.get('release_date'),
+            movie_data.get('release_country'),
+            movie_data.get('poster_link'),
+            movie_data.get('rating'),
+            movie_data.get('revenue'),
+            movie_data.get('runtime'),
+            movie_data.get('director'),
+            movie_data.get('overview'),
+            movie_data.get('id')
+        ]
         self.db_request(query, False, params)
 
+        if 'actors_for_delete' in movie_data:
+            delete_actors_query = sql.SQL('''
+                DELETE FROM movies_actors 
+                WHERE movie_id = %s AND actor_id = %s
+            ''')
+            for actor_id in movie_data.get('actors_for_delete', []):
+                if actor_id is None:
+                    continue
+                self.db_request(delete_actors_query, False, [movie_data.get('id'), actor_id])
+
+        if 'actors_for_insert' in movie_data:
+            insert_actors_query = sql.SQL('''
+                INSERT INTO movies_actors (movie_id, actor_id)
+                VALUES (%s, %s)
+            ''')
+            for actor_id in movie_data.get('actors_for_insert', []):
+                if actor_id is None:
+                    continue
+                self.db_request(insert_actors_query, False, [movie_data.get('id'), actor_id])
+
+        if 'genres_for_delete' in movie_data:
+            delete_genres_query = sql.SQL('''
+                DELETE FROM movies_genres 
+                WHERE movie_id = %s AND genre_id = %s
+            ''')
+            for genre_id in movie_data.get('genres_for_delete', []):
+                if genre_id is None:
+                    continue
+                self.db_request(delete_genres_query, False, [movie_data.get('id'), genre_id])
+
+        if 'genres_for_insert' in movie_data:
+            insert_genres_query = sql.SQL('''
+                INSERT INTO movies_genres (movie_id, genre_id)
+                VALUES (%s, %s)
+            ''')
+            for genre_id in movie_data.get('genres_for_insert', []):
+                if genre_id is None:
+                    continue
+                self.db_request(insert_genres_query, False, [movie_data.get('id'), genre_id])
+
+        if 'keywords_for_delete' in movie_data:
+            delete_keywords_query = sql.SQL('''
+                DELETE FROM movies_keywords 
+                WHERE movie_id = %s AND keyword_id = %s
+            ''')
+            for keyword_id in movie_data.get('keywords_for_delete', []):
+                if keyword_id is None:
+                    continue
+                self.db_request(delete_keywords_query, False, [movie_data.get('id'), keyword_id])
+
+        if 'keywords_for_insert' in movie_data:
+            insert_keywords_query = sql.SQL('''
+                INSERT INTO movies_keywords (movie_id, keyword_id)
+                VALUES (%s, %s)
+            ''')
+            for keyword_id in movie_data.get('keywords_for_insert', []):
+                if keyword_id is None:
+                    continue
+                self.db_request(insert_keywords_query, False, [movie_data.get('id'), keyword_id])
+        
     def delete_movie(self, movie_id: int):
         query = sql.SQL('DELETE FROM movies WHERE id = %s')
         params = [movie_id]

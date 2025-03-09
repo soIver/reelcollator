@@ -62,8 +62,10 @@ class ScaledLabel(QLabel):
         }}''')
 
 class ParameterPanel(QWidget):
-    def __init__(self, name: str, placeholder: str, default: str, values: dict[str | int, str], one_value: bool):
+    def __init__(self, name: str, placeholder: str, default: str, values: dict[str | int, str], one_value: bool, ext_checked = None, ext_not_checked = None):
         super().__init__()
+        self.ext_checked = ext_checked
+        self.ext_not_checked = ext_not_checked
         self.checked_params: dict[int, list[int, int]] = {}
         self.current_row, self.current_col = 0, 0
         self.values = values
@@ -94,6 +96,8 @@ class ParameterPanel(QWidget):
         self.setLayout(self.main_lo)
     
     def update_checked_params(self, text: str, id: int = None):
+        if not self.ext_checked is None:
+            self.ext_checked()
         if id is None:
             for key in self.values.keys():
                 if self.values.get(key) == text:
@@ -110,7 +114,10 @@ class ParameterPanel(QWidget):
             param_key = id
             text = self.values.get(param_key)
         if not param_key:
-            self.param_edit.clear()
+            if not self.ext_not_checked is None:
+                self.ext_not_checked()
+            else:
+                self.param_edit.clear()
             return
         self.checked_params[param_key] = (self.current_row, self.current_col)
         new_btn = QPushButton()
@@ -186,9 +193,11 @@ class MoviePage(QWidget):
         self.actors = movie_data.get('actors', [])
         self.genres = movie_data.get('genres', [])
         self.keywords = movie_data.get('keywords', [])
-        self.movie_id = movie_data.get('id')
+        self.movie_id = movie_data.get('id', '')
         self.movie_data = movie_data
         self.__init_ui()
+        init_state = 'just_saved' if self.movie_id else 'just_created'
+        self.update_state(init_state)
 
     def __init_ui(self):
         self.poster = ScaledLabel()
@@ -197,42 +206,42 @@ class MoviePage(QWidget):
             self.poster.setAlignment(Qt.AlignCenter)
             
         self.poster_link = QLineEdit(self.poster_link_txt)
-        self.rating = QLabel(text=self.rating_txt)
+        self.rating = QLabel(self.rating_txt)
         self.rating.sizeHint = lambda: QSize(50, 60)
         self.release_date = QLineEdit(self.release_date_txt)
+        self.release_date.setInputMask("00-00-0000")
         self.release_date.sizeHint = lambda: QSize(200, 60)
         self.runtime = QLineEdit(str(self.runtime_txt))
         self.runtime.sizeHint = lambda: QSize(150, 60)
         self.revenue = QLineEdit(str(self.revenue_txt))
         self.revenue.sizeHint = lambda: QSize(150, 60)
         self.create_btn = CustomPushButton('Создать новую карточку фильма')
-        self.create_btn.setEnabled(False)
-        self.create_btn.updateBackgroundColor()
+        self.create_btn.clicked.connect(self.__create_new)
         self.delete_btn = CustomPushButton('Удалить')
-        self.delete_btn.clicked.connect(self.__delete_movie)
-        self.delete_btn.setEnabled(False)
-        self.delete_btn.updateBackgroundColor()
+        self.delete_btn.clicked.connect(self.__pre_delete_movie)
         self.save_btn = CustomPushButton('Сохранить')
         self.save_btn.clicked.connect(self.__save_movie)
 
         self.title = QLineEdit(self.title_txt)
         self.title.setObjectName('title-edit')
         self.description = QPlainTextEdit(self.description_txt)
-        self.country_param = ParameterPanel('Страна:', '', self.release_country_txt, countries, True)
-        self.director_param = ParameterPanel('Режиссёр:', '', directors.get(self.director), directors, True)
-        self.actors_param = ParameterPanel('Актёры:', '', '', actors, False)
+        self.country_param = ParameterPanel('Страна:', '', self.release_country_txt, countries, True, lambda: self.update_state('just_changed'))
+        self.director_param = ParameterPanel('Режиссёр:', '', directors.get(self.director), directors, True, lambda: self.update_state('just_changed'))
+        self.director_param.update_checked_params(directors.get(self.director))
+        self.actors_param = ParameterPanel('Актёры:', '', '', actors, False, lambda: self.update_state('just_changed'))
         for actor_id in self.actors:
             if not actor_id is None:
                 self.actors_param.update_checked_params('', actor_id)
-        self.genres_param = ParameterPanel('Жанры:', '', '', genres, False)
+        self.genres_param = ParameterPanel('Жанры:', '', '', genres, False, lambda: self.update_state('just_changed'))
         for genre_id in self.genres:
             if not genre_id is None:
                 self.genres_param.update_checked_params('', genre_id)
-        self.keywords_param = ParameterPanel('Ключевые слова:', '', '', keywords, False)
+        self.keywords_param = ParameterPanel('Ключевые слова:', '', '', keywords, False, lambda: self.update_state('just_changed'))
         for keyword_id in self.keywords:
             if not keyword_id is None:
                 self.keywords_param.update_checked_params('', keyword_id)
-
+        for edit in (self.poster_link, self.release_date, self.runtime, self.revenue, self.title, self.description):
+            edit.textChanged.connect(lambda: self.update_state('just_changed'))
         container = QVBoxLayout()
         container.addWidget(self.description, alignment=Qt.AlignTop)
         container.addWidget(self.country_param, alignment=Qt.AlignTop)
@@ -278,7 +287,31 @@ class MoviePage(QWidget):
 
         self.setLayout(layout)
 
+    def update_state(self, state: str):
+        self.state = state
+        match self.state:
+            case 'just_saved':
+                enable_save = False
+                enable_create = True
+                enable_delete = True
+            case 'just_created':
+                enable_save = False
+                enable_create = False
+                enable_delete = False
+            case 'just_changed':
+                enable_save = True
+                enable_create = True
+                enable_delete = True if self.movie_id else False
+
+        self.save_btn.setEnabled(enable_save)
+        self.create_btn.setEnabled(enable_create)
+        self.delete_btn.setEnabled(enable_delete)
+        self.save_btn.updateBackgroundColor()
+        self.create_btn.updateBackgroundColor()
+        self.delete_btn.updateBackgroundColor()
+
     def __save_movie(self):
+        self.update_state('just_saved')
         self.movie_data['name'] = self.title.text()
         self.movie_data['overview'] = self.description.toPlainText()
         self.movie_data['rating'] = float(self.rating.text())
@@ -286,21 +319,140 @@ class MoviePage(QWidget):
         self.movie_data['release_date'] = self.release_date.text()
         self.movie_data['revenue'] = int(self.revenue.text())
         self.movie_data['runtime'] = int(self.runtime.text())
-        self.movie_data['release_country'] = tuple(self.country_param.values.values())[0]
-        # self.director = self.movie_data.get('director', '')
-        # self.actors = self.movie_data.get('actors', [])
-        # self.genres = self.movie_data.get('genres', [])
-        # self.keywords = self.movie_data.get('keywords', [])
+        self.movie_data['release_country'] = self.country_param.param_edit.text()
+        self.movie_data['director'] = tuple(self.director_param.checked_params.keys())[0]
+        checked_actors = list(self.actors_param.checked_params.keys())
+        checked_genres = list(self.genres_param.checked_params.keys())
+        checked_keywords = list(self.keywords_param.checked_params.keys())
+        self.movie_data['actors_for_insert'] = [actor if actor not in self.actors else None for actor in checked_actors]
+        self.movie_data['actors_for_delete'] = [actor if actor not in checked_actors else None for actor in self.actors]
+        self.movie_data['genres_for_insert'] = [genre if genre not in self.genres else None for genre in checked_genres]
+        self.movie_data['genres_for_delete'] = [genre if genre not in checked_genres else None for genre in self.genres]
+        self.movie_data['keywords_for_insert'] = [keyword if keyword not in self.keywords else None for keyword in checked_keywords]
+        self.movie_data['keywords_for_delete'] = [keyword if keyword not in checked_keywords else None for keyword in self.keywords]
+        self.actors = checked_actors
+        self.genres = checked_genres
+        self.keywords = checked_keywords
         data_provider.save_movie(self.movie_data)
 
-    def __delete_movie(self):
-        data_provider.delete_movie(self.movie_id)
+    def __pre_delete_movie(self):
+        self.overlay = QWidget(self)
+        self.overlay.setGeometry(0, 0, self.width(), self.height())
+        self.overlay.setStyleSheet("background-color: rgba(0, 0, 0, 150)")
+        self.overlay.show()
+        self.confirm_dialog = ModalWidget(self, "Требуется подтверждение", 
+        "Удаление карточки фильма является необратимым\nдействием и влечёт за собой полную потерю\nхранимой в системе информации о фильме",
+        "Удалить", "Не удалять", self.delete_movie, self.close_dialog)
+        self.confirm_dialog.show()
+
+    def close_dialog(self):
+        self.confirm_dialog.close()
+        self.overlay.close()
+
+    def delete_movie(self):
+        self.overlay.close()
+        self.confirm_dialog.close()
         app_window.main_window.removeTab(1)
         app_window.main_window.insertTab(1, MoviePage(), 'Фильм')
         app_window.main_window.setCurrentIndex(1)
+        if self.movie_id:
+            data_provider.delete_movie(self.movie_id)
 
     def __create_new(self):
         pass
+
+class ModalWidget(QWidget):
+    def __init__(self, parent: QWidget, main_message_txt: str, sub_message_txt: str, left_title: str, right_title: str, left_action, right_action = None):
+        super().__init__()
+        color_text_light = '#303030'
+        color_bg = '#f5f5f5'
+        color_btn_hover = ' #6ba476'
+        color_deletion = ' #d62828'
+        self.setStyleSheet(f'''
+        QLabel#main-message {{
+            font-size: 26pt;
+            font-weight: bold;
+            margin-right: 20px;
+            margin-top: 20px;
+
+        }}
+        QLabel#sub-message {{
+            font-size: 16pt;
+            font-weight: normal;
+            margin: 20px;
+            margin-top: 10px;
+
+        }}
+        QLabel#sign {{
+            font-size: 26pt; 
+            font-weight: bold;
+            border: 2px solid #000;
+            margin-left: 20px;
+            margin-top: 20px;
+        }}
+        QPushButton#modal-cancel {{
+            font-size: 18pt;
+            background-color: {color_bg};
+            color: {color_text_light};
+            font-weight: bold;
+            border-radius: 5px;
+        }}
+        QPushButton#modal-cancel:hover {{
+            background-color: {color_btn_hover};
+        }}
+        QPushButton#modal-delete {{
+            font-size: 18pt;
+            background-color: {color_bg};
+            color: {color_text_light};
+            font-weight: bold;
+            border-radius: 5px;
+        }}
+        QPushButton#modal-delete:hover {{
+            background-color: {color_deletion};
+            color: white;
+        }}''')
+
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        dialog_layout = QVBoxLayout()
+        title_layout = QHBoxLayout()
+        sign = QLabel('!')
+        sign.setAlignment(Qt.AlignCenter)
+        sign.setFixedSize(90, 90)
+        sign.setObjectName("sign")
+        message = QLabel(main_message_txt)
+        message.setObjectName('main-message')
+        sub_message = QLabel(sub_message_txt)
+        sub_message.setObjectName('sub-message')
+        title_layout.addWidget(sign)
+        title_layout.addStretch()
+        title_layout.addWidget(message)
+
+        button_layout = QHBoxLayout()
+        delete_button = QPushButton(left_title)
+        cancel_button = QPushButton(right_title)
+        delete_button.setObjectName('modal-delete')
+        cancel_button.setObjectName('modal-cancel')
+        delete_button.clicked.connect(left_action)
+        cancel_button.clicked.connect(right_action)
+
+        button_layout.addWidget(delete_button)
+        button_layout.addWidget(cancel_button)
+
+        dialog_layout.addLayout(title_layout)
+        dialog_layout.addWidget(sub_message)
+        dialog_layout.addStretch()
+        dialog_layout.addLayout(button_layout)
+        self.setLayout(dialog_layout)
+
+        dialog_width = 800
+        dialog_height = 400
+        self.setGeometry(
+            (parent.width() - dialog_width) // 2,
+            (parent.height() - dialog_height) // 2,
+            dialog_width,
+            dialog_height
+        )
 
 class MovieCard(QWidget):
     def __init__(self, movie_data: dict[str], poster: QPixmap):
@@ -981,6 +1133,7 @@ class MainWindow(QTabWidget):
             background-color: {color_deletion};
             color: {color_edit}
         }}
+        
         QCompleter {{
             color: {color_text};
             background-color: {color_setting_hover};
