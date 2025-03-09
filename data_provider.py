@@ -27,7 +27,6 @@ class DataProvider:
         for key, value in params.items():
             request += f'{key}='
             request += ','.join(value) + '&'
-        print(request)
         return self.session.get(url=request.strip('&'), headers=headers).json()['results']
     
     def get_image_bin(self, image_path: str):
@@ -51,7 +50,7 @@ class DataProvider:
         genres_included=None, genres_excluded=None, keywords_included=None, 
         keywords_excluded=None, actors=None, director=None, title_part=None, 
         country=None, release_date_gte=None, release_date_lte=None,
-        order_by=None, order_dir='ASC'):
+        order_by=None, order_dir='DESC'):
 
         query = sql.SQL("""
         SELECT m.id, m.name, m.release_date, m.release_country, m.poster_link, m.rating, m.revenue, m.runtime, m.director, m.overview,
@@ -69,24 +68,35 @@ class DataProvider:
         """)
 
         conditions = []
+        params = []
+
         if genres_included:
             conditions.append(sql.SQL("m.id IN (SELECT movie_id FROM movies_genres WHERE genre_id IN %s)"))
+            params.append(tuple(genres_included))
         if genres_excluded:
             conditions.append(sql.SQL("m.id NOT IN (SELECT movie_id FROM movies_genres WHERE genre_id IN %s)"))
+            params.append(tuple(genres_excluded))
         if keywords_included:
             conditions.append(sql.SQL("m.id IN (SELECT movie_id FROM movies_keywords WHERE keyword_id IN %s)"))
+            params.append(tuple(keywords_included))
         if keywords_excluded:
             conditions.append(sql.SQL("m.id NOT IN (SELECT movie_id FROM movies_keywords WHERE keyword_id IN %s)"))
+            params.append(tuple(keywords_excluded))
         if actors:
             conditions.append(sql.SQL("m.id IN (SELECT movie_id FROM movies_actors WHERE actor_id IN %s)"))
+            params.append(tuple(actors))
         if director:
             conditions.append(sql.SQL("m.director = %s"))
+            params.append(director)
         if title_part:
             conditions.append(sql.SQL("m.name ILIKE %s"))
+            params.append(f'%{title_part}%')
         if country:
             conditions.append(sql.SQL("m.release_country = %s"))
+            params.append(country)
         if release_date_gte and release_date_lte:
             conditions.append(sql.SQL("m.release_date BETWEEN %s AND %s"))
+            params.extend([release_date_gte, release_date_lte])
 
         if conditions:
             query += sql.SQL(" AND ") + sql.SQL(" AND ").join(conditions)
@@ -94,32 +104,9 @@ class DataProvider:
         query += sql.SQL(" GROUP BY m.id")
         query += sql.SQL(f" ORDER BY {order_by if order_by else 'm.release_date'} {order_dir}")
 
-        # Подготовка параметров для запроса
-        params = []
-        if genres_included:
-            params.append(tuple(genres_included))
-        if genres_excluded:
-            params.append(tuple(genres_excluded))
-        if keywords_included:
-            params.append(tuple(keywords_included))
-        if keywords_excluded:
-            params.append(tuple(keywords_excluded))
-        if actors:
-            params.append(tuple(actors))
-        if director:
-            params.append(director)
-        if title_part:
-            params.append(f'%{title_part}%')
-        if country:
-            params.append(country)
-        if release_date_gte and release_date_lte:
-            params.extend([release_date_gte, release_date_lte])
-
-        # Выполнение запроса
         rows = self.db_request(query, params=params)
 
-        # Формирование результата
-        movies = []
+        movies: list[dict] = []
         for row in rows:
             movie = {
                 'id': row['id'],
@@ -129,6 +116,7 @@ class DataProvider:
                 'poster_link': row['poster_link'],
                 'rating': round(row['rating'], 1),
                 'revenue': row['revenue'],
+                'runtime': row['runtime'],
                 'director': row['director'],
                 'overview': row['overview'],
                 'actors': row['actors'],
@@ -136,9 +124,19 @@ class DataProvider:
                 'keywords': row['keywords']
             }
             movies.append(movie)
-        print(movies)
         return movies
+    
+    def save_movie(self, movie_data: dict):
+        query = sql.SQL('''UPDATE movies SET name = %s, release_date = %s, release_country = %s, poster_link = %s, rating = %s, revenue = %s, runtime = %s, director = %s, overview = %s
+        WHERE id = %s''')
+        params = [movie_data.get(param) for param in ('name', 'release_date', 'release_country', 'poster_link', 'rating', 'revenue', 'runtime', 'director', 'overview', 'id')]
+        self.db_request(query, False, params)
 
+    def delete_movie(self, movie_id: int):
+        query = sql.SQL('DELETE FROM movies WHERE id = %s')
+        params = [movie_id]
+        self.db_request(query, False, params)
+        
     def db_request(self, query: str, get: bool = True, params = None):
         result = None
         with closing(psycopg2.connect(dbname=dbname, user=user, password=password, host=host)) as conn:

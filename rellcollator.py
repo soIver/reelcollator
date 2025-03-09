@@ -1,4 +1,4 @@
-import sys, asyncio, json
+import sys, asyncio
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
@@ -18,7 +18,7 @@ class ImageLoader(QRunnable):
     def run(self):
         image_data = data_provider.get_image_bin(self.poster_link)
         pixmap = self.__pixmap_from_bytes(image_data)
-        QMetaObject.invokeMethod(self.callback, "add_film_card", Qt.QueuedConnection, Q_ARG(int, self.movie_id), Q_ARG(QPixmap, pixmap))
+        QMetaObject.invokeMethod(self.callback, "add_movie_card", Qt.QueuedConnection, Q_ARG(int, self.movie_id), Q_ARG(QPixmap, pixmap))
 
     def __pixmap_from_bytes(self, image_bin):
         byte_array = QByteArray(image_bin)
@@ -78,8 +78,8 @@ class ParameterPanel(QWidget):
         self.param_edit.setObjectName('param-edit')
         self.main_lo = QVBoxLayout()
         child_lo = QHBoxLayout()
-        self.completer.activated.connect(lambda: self.__update_checked_params(self.param_edit.text()))
-        self.param_edit.returnPressed.connect(lambda: self.__update_checked_params(self.param_edit.text()))
+        self.completer.activated.connect(lambda: self.update_checked_params(self.param_edit.text()))
+        self.param_edit.returnPressed.connect(lambda: self.update_checked_params(self.param_edit.text()))
         if not one_value:
             label_lo = QHBoxLayout()
             self.main_lo.addLayout(label_lo)
@@ -93,45 +93,56 @@ class ParameterPanel(QWidget):
         self.main_lo.addLayout(child_lo)
         self.setLayout(self.main_lo)
     
-    def __update_checked_params(self, text: str):
-        for key in self.values.keys():
-            if self.values[key] == text:
-                if key not in self.checked_params:
-                    if self.one_value:
-                        self.checked_params = {}
-                        self.checked_params[key] = 0
-                        return
-                    self.checked_params[key] = (self.current_row, self.current_col)
-                    new_btn = QPushButton()
-                    new_btn.setObjectName('deletion')
-                    new_btn.setCursor(Qt.PointingHandCursor)
-                    new_btn.setFixedSize(40, 40)
-                    new_btn.clicked.connect(lambda: self.__delete_param(key))
-                    new_btn.setText('×')
-                    new_label = QLabel(text)
-                    new_label.setAlignment(Qt.AlignCenter)
-                    new_label.setObjectName('param')
+    def update_checked_params(self, text: str, id: int = None):
+        if id is None:
+            for key in self.values.keys():
+                if self.values.get(key) == text:
+                    if key not in self.checked_params:
+                        if self.one_value:
+                            self.checked_params = {}
+                            self.checked_params[key] = 0
+                            return
+                        param_key = key
+                        break
+            else:
+                param_key = None
+        else:
+            param_key = id
+            text = self.values.get(param_key)
+        if not param_key:
+            self.param_edit.clear()
+            return
+        self.checked_params[param_key] = (self.current_row, self.current_col)
+        new_btn = QPushButton()
+        new_btn.setObjectName('deletion')
+        new_btn.setCursor(Qt.PointingHandCursor)
+        new_btn.setFixedSize(40, 40)
+        new_btn.clicked.connect(lambda: self.__delete_param(param_key))
+        new_btn.setText('×')
+        new_label = QLabel(text)
+        new_label.setAlignment(Qt.AlignCenter)
+        new_label.setObjectName('param')
 
-                    layout = self.main_lo.itemAt(self.current_row + 1)
-                    if layout is None:
-                        layout = QHBoxLayout()
-                        self.main_lo.insertLayout(self.current_row + 1, layout)
+        layout = self.main_lo.itemAt(self.current_row + 1)
+        if layout is None:
+            layout = QHBoxLayout()
+            self.main_lo.insertLayout(self.current_row + 1, layout)
 
-                    insert_pos = self.current_col * 2
-                    layout.insertWidget(insert_pos, new_btn)
-                    layout.insertWidget(insert_pos, new_label)
+        insert_pos = self.current_col * 2
+        layout.insertWidget(insert_pos, new_btn)
+        layout.insertWidget(insert_pos, new_label)
 
-                    self.current_col += 1
-                    if self.current_col == 3:
-                        self.current_col = 0
-                        self.current_row += 1
-                        new_layout = QHBoxLayout()
-                        self.main_lo.insertLayout(self.current_row + 1, new_layout)
-                        new_layout.addWidget(self.param_edit)
-                        new_layout.addStretch()
-                    else:
-                        layout.insertWidget(layout.count()-2, self.param_edit)
-                break
+        self.current_col += 1
+        if self.current_col == 3:
+            self.current_col = 0
+            self.current_row += 1
+            new_layout = QHBoxLayout()
+            self.main_lo.insertLayout(self.current_row + 1, new_layout)
+            new_layout.addWidget(self.param_edit)
+            new_layout.addStretch()
+        else:
+            layout.insertWidget(layout.count()-2, self.param_edit)
+                
         QTimer.singleShot(0, self.param_edit.clear)
         self.param_edit.setFocus()
 
@@ -156,22 +167,27 @@ class ParameterPanel(QWidget):
         for id in params_ids:
             for key in self.values.keys():
                 if key == id:
-                    self.__update_checked_params(self.values[key])
+                    self.update_checked_params(self.values[key])
                     break
 
-class FilmPage(QWidget):
+class MoviePage(QWidget):
     def __init__(self, movie_data: dict[str] = {}, poster: QPixmap = None):
         super().__init__()
-        self.fid = movie_data.get('id', '')
         self.poster_img = poster
         self.title_txt = movie_data.get('name', '')
         self.description_txt = movie_data.get('overview', '')
         self.rating_txt = str(movie_data.get('rating', 0))
-        self.poster_path = movie_data.get('poster_link', '')
-        self.release_date = str(movie_data.get('release_date', ''))
+        self.poster_link_txt = movie_data.get('poster_link', '')
+        self.release_date_txt = str(movie_data.get('release_date', ''))
         self.revenue_txt = str(movie_data.get('revenue', 0))
-        self.runtime = str(movie_data.get('runtime', 0))
-        self.release_country = movie_data.get('origin_country', '')
+        self.runtime_txt = str(movie_data.get('runtime', 0))
+        self.release_country_txt = movie_data.get('release_country', '')
+        self.director = movie_data.get('director', '')
+        self.actors = movie_data.get('actors', [])
+        self.genres = movie_data.get('genres', [])
+        self.keywords = movie_data.get('keywords', [])
+        self.movie_id = movie_data.get('id')
+        self.movie_data = movie_data
         self.__init_ui()
 
     def __init_ui(self):
@@ -180,39 +196,50 @@ class FilmPage(QWidget):
             self.poster.setPixmap(self.poster_img)
             self.poster.setAlignment(Qt.AlignCenter)
             
-        self.poster_link = QLineEdit(self.poster_path)
+        self.poster_link = QLineEdit(self.poster_link_txt)
         self.rating = QLabel(text=self.rating_txt)
         self.rating.sizeHint = lambda: QSize(50, 60)
-        self.date = QLineEdit(self.release_date)
-        self.date.sizeHint = lambda: QSize(200, 60)
-        self.duration = QLineEdit(str(self.runtime))
-        self.duration.sizeHint = lambda: QSize(150, 60)
+        self.release_date = QLineEdit(self.release_date_txt)
+        self.release_date.sizeHint = lambda: QSize(200, 60)
+        self.runtime = QLineEdit(str(self.runtime_txt))
+        self.runtime.sizeHint = lambda: QSize(150, 60)
         self.revenue = QLineEdit(str(self.revenue_txt))
         self.revenue.sizeHint = lambda: QSize(150, 60)
         self.create_btn = CustomPushButton('Создать новую карточку фильма')
         self.create_btn.setEnabled(False)
         self.create_btn.updateBackgroundColor()
         self.delete_btn = CustomPushButton('Удалить')
+        self.delete_btn.clicked.connect(self.__delete_movie)
         self.delete_btn.setEnabled(False)
         self.delete_btn.updateBackgroundColor()
         self.save_btn = CustomPushButton('Сохранить')
+        self.save_btn.clicked.connect(self.__save_movie)
 
         self.title = QLineEdit(self.title_txt)
         self.title.setObjectName('title-edit')
         self.description = QPlainTextEdit(self.description_txt)
-        country_param = ParameterPanel('Страна:', '', countries.get(self.release_country), countries, True)
-        director_param = ParameterPanel('Режиссёр:', '', '', directors, True)
-        actors_param = ParameterPanel('Актёры:', '', '', actors, False)
-        genres_param = ParameterPanel('Жанры:', '', '', genres, False)
-        keywords_param = ParameterPanel('Ключевые слова:', '', '', keywords, False)
+        self.country_param = ParameterPanel('Страна:', '', self.release_country_txt, countries, True)
+        self.director_param = ParameterPanel('Режиссёр:', '', directors.get(self.director), directors, True)
+        self.actors_param = ParameterPanel('Актёры:', '', '', actors, False)
+        for actor_id in self.actors:
+            if not actor_id is None:
+                self.actors_param.update_checked_params('', actor_id)
+        self.genres_param = ParameterPanel('Жанры:', '', '', genres, False)
+        for genre_id in self.genres:
+            if not genre_id is None:
+                self.genres_param.update_checked_params('', genre_id)
+        self.keywords_param = ParameterPanel('Ключевые слова:', '', '', keywords, False)
+        for keyword_id in self.keywords:
+            if not keyword_id is None:
+                self.keywords_param.update_checked_params('', keyword_id)
 
         container = QVBoxLayout()
         container.addWidget(self.description, alignment=Qt.AlignTop)
-        container.addWidget(country_param, alignment=Qt.AlignTop)
-        container.addWidget(director_param, alignment=Qt.AlignTop)
-        container.addWidget(actors_param, alignment=Qt.AlignTop)
-        container.addWidget(genres_param, alignment=Qt.AlignTop)
-        container.addWidget(keywords_param, alignment=Qt.AlignTop)
+        container.addWidget(self.country_param, alignment=Qt.AlignTop)
+        container.addWidget(self.director_param, alignment=Qt.AlignTop)
+        container.addWidget(self.actors_param, alignment=Qt.AlignTop)
+        container.addWidget(self.genres_param, alignment=Qt.AlignTop)
+        container.addWidget(self.keywords_param, alignment=Qt.AlignTop)
 
         container_widget = QWidget()
         container_widget.setLayout(container)
@@ -226,9 +253,9 @@ class FilmPage(QWidget):
         botside_l.addWidget(icons['revenue'])
         botside_l.addWidget(self.revenue)
         botside_l.addWidget(icons['date'])
-        botside_l.addWidget(self.date)
+        botside_l.addWidget(self.release_date)
         botside_l.addWidget(icons['duration'])
-        botside_l.addWidget(self.duration)
+        botside_l.addWidget(self.runtime)
 
         leftside = QVBoxLayout()
         leftside.addWidget(self.poster, alignment=Qt.AlignHCenter)
@@ -251,7 +278,31 @@ class FilmPage(QWidget):
 
         self.setLayout(layout)
 
-class FilmCard(QWidget):
+    def __save_movie(self):
+        self.movie_data['name'] = self.title.text()
+        self.movie_data['overview'] = self.description.toPlainText()
+        self.movie_data['rating'] = float(self.rating.text())
+        self.movie_data['poster_link'] = self.poster_link.text()
+        self.movie_data['release_date'] = self.release_date.text()
+        self.movie_data['revenue'] = int(self.revenue.text())
+        self.movie_data['runtime'] = int(self.runtime.text())
+        self.movie_data['release_country'] = tuple(self.country_param.values.values())[0]
+        # self.director = self.movie_data.get('director', '')
+        # self.actors = self.movie_data.get('actors', [])
+        # self.genres = self.movie_data.get('genres', [])
+        # self.keywords = self.movie_data.get('keywords', [])
+        data_provider.save_movie(self.movie_data)
+
+    def __delete_movie(self):
+        data_provider.delete_movie(self.movie_id)
+        app_window.main_window.removeTab(1)
+        app_window.main_window.insertTab(1, MoviePage(), 'Фильм')
+        app_window.main_window.setCurrentIndex(1)
+
+    def __create_new(self):
+        pass
+
+class MovieCard(QWidget):
     def __init__(self, movie_data: dict[str], poster: QPixmap):
         super().__init__()
         self.movie_data = movie_data
@@ -300,9 +351,9 @@ class FilmCard(QWidget):
         self.poster_obj.setCursor(Qt.PointingHandCursor)
         self.poster_obj.installEventFilter(self)
 
-    def __open_film_page(self):
+    def __open_movie_page(self):
         app_window.main_window.removeTab(1)
-        app_window.main_window.insertTab(1, FilmPage(self.movie_data,
+        app_window.main_window.insertTab(1, MoviePage(self.movie_data,
                                             poster = self.poster_copy), 'Фильм')
         app_window.main_window.setCurrentIndex(1)
 
@@ -312,7 +363,7 @@ class FilmCard(QWidget):
         elif event.type() == QEvent.Leave and source is self.poster_obj:
             self.poster_obj.updateBorders(False)
         elif event.type() == QEvent.MouseButtonPress and source is self.poster_obj:
-            self.__open_film_page()
+            self.__open_movie_page()
         return super().eventFilter(source, event)
 
     def delete(self):
@@ -451,9 +502,9 @@ class SearchPage(QWidget):
         self.setLayout(main_layout)
 
     @pyqtSlot(int, QPixmap)
-    def add_film_card(self, movie_id: int, pixmap: QPixmap):
+    def add_movie_card(self, movie_id: int, pixmap: QPixmap):
         if not pixmap.isNull():
-            result = FilmCard(self.movies.get(movie_id), pixmap)
+            result = MovieCard(self.movies.get(movie_id), pixmap)
             self.results.results_layout.itemAt(self.results.results_layout.count()-2).insertWidget(self.results.current_col_result, result, alignment = Qt.AlignTop | Qt.AlignLeft)
             self.results.results_layout.itemAt(self.results.results_layout.count()-2).addStretch()
             self.results.current_col_result += 1
@@ -465,8 +516,8 @@ class SearchPage(QWidget):
 
     def process_next_image(self):
         if self.image_queue:
-            if self.results.film_cnt > 8:
-                self.results.film_cnt = 0
+            if self.results.movie_cnt > 8:
+                self.results.movie_cnt = 0
                 self.results.current_col_result = 0
                 self.results.current_row_result = 0
                 self.results.add_page()
@@ -474,7 +525,7 @@ class SearchPage(QWidget):
             movie_id, poster_link = self.image_queue.popleft()
             loader = ImageLoader(movie_id, poster_link, self)
             QThreadPool.globalInstance().start(loader)
-            self.results.film_cnt += 1
+            self.results.movie_cnt += 1
     
     def show_msg(self, msg: str):
         msg_label = QLabel(msg)
@@ -532,7 +583,7 @@ class SearchPage(QWidget):
         self.results.current_row_result = 0
         self.results.page_num = 1
         self.results.page_cnt = 0
-        self.results.film_cnt = 0
+        self.results.movie_cnt = 0
         while self.results.count() > 0:
             widget = self.results.widget(0)
             self.results.removeWidget(widget)
@@ -545,7 +596,7 @@ class ResultsPanel(QStackedWidget):
         self.current_col_result = 0
         self.current_row_result = 0
         self.page_cnt = 0
-        self.film_cnt = 0
+        self.movie_cnt = 0
         self.page_num = 1
         self.add_page()
 
@@ -594,10 +645,10 @@ class StatsPage(QWidget):
         top_lo.addStretch()
         top_lo.addWidget(self.update_bttn, alignment=Qt.AlignRight)
         
-        self.film_bttns = ButtonsPanel(self.set_data, {'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
-        films_top_lo = QHBoxLayout()
-        films_top_lo.addWidget(self.film_bttns)
-        films_top_lo.addWidget(QLabel('количество фильмов'))
+        self.movie_bttns = ButtonsPanel(self.set_data, {'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
+        movies_top_lo = QHBoxLayout()
+        movies_top_lo.addWidget(self.movie_bttns)
+        movies_top_lo.addWidget(QLabel('количество фильмов'))
 
         self.favorite_value = QLabel()
         favorite_lo = QVBoxLayout()
@@ -615,13 +666,13 @@ class StatsPage(QWidget):
         watchlist_widget.setObjectName('stats')
         watchlist_widget.setLayout(watchlist_lo)
 
-        films_lo = QVBoxLayout()
-        films_lo.addLayout(films_top_lo)
-        films_lo.addWidget(favorite_widget)
-        films_lo.addWidget(watchlist_widget)
-        films_widget = QWidget()
-        films_widget.setObjectName('stats')
-        films_widget.setLayout(films_lo)
+        movies_lo = QVBoxLayout()
+        movies_lo.addLayout(movies_top_lo)
+        movies_lo.addWidget(favorite_widget)
+        movies_lo.addWidget(watchlist_widget)
+        movies_widget = QWidget()
+        movies_widget.setObjectName('stats')
+        movies_widget.setLayout(movies_lo)
 
         self.query_bttns = ButtonsPanel(self.set_data, {'name': 'общее', 'value': 'all'}, {'name': 'среднее', 'value': 'avg'})
         query_top_lo = QHBoxLayout()
@@ -665,7 +716,7 @@ class StatsPage(QWidget):
         queries_widget.setLayout(queries_lo)
 
         bot_left_lo = QVBoxLayout()
-        bot_left_lo.addWidget(films_widget)
+        bot_left_lo.addWidget(movies_widget)
         bot_left_lo.addWidget(queries_widget)
 
         self.users_genres_value = QLabel()
@@ -749,7 +800,7 @@ class StatsPage(QWidget):
         self.usr_cnt_value.setText(str(self.usr_cnt))
         if self.usr_cnt == 0:
             self.usr_cnt = 1
-        match self.film_bttns.value:
+        match self.movie_bttns.value:
             case 'all':
                 self.favorite_value.setText(str(self.favorite))
                 self.watchlist_value.setText(str(self.watchlist))
@@ -942,7 +993,7 @@ class AppWindow(QGraphicsView):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWindowTitle("Reelcollator")
         self.setMinimumSize(720, 480)
-        self.main_window = MainWindow(Поиск = SearchPage(), Фильм = FilmPage(), Статистика = StatsPage())
+        self.main_window = MainWindow(Поиск = SearchPage(), Фильм = MoviePage(), Статистика = StatsPage())
         scene = QGraphicsScene()
         self.awidth = QDesktopWidget().width() - 20
         self.aheight = QDesktopWidget().height() - 130
