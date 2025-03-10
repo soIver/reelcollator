@@ -1,6 +1,7 @@
 from dns_client.adapters.requests import DNSClientSession
 from contextlib import closing
 from psycopg2 import sql
+from urllib.parse import quote
 import psycopg2, psycopg2.extras, re, requests, xml.etree.ElementTree as ET
 
 base_url = "https://api.themoviedb.org/3!/movie?"
@@ -22,12 +23,11 @@ class DataProvider:
         request = f'{base_url[:-1].replace('!', '')}/{fid}?language=ru-RU'
         return self.session.get(request, headers=headers).json()
 
-    def search(self, params: dict[str, list[str]]):
+    def search(self, name: str):
         request = base_url.replace('!', '/search')
-        for key, value in params.items():
-            request += f'{key}='
-            request += ','.join(value) + '&'
-        return self.session.get(url=request.strip('&'), headers=headers).json()['results']
+        name = quote(name, encoding='utf-8').replace('25', '')
+        request += f"query={name}&include_adult=false&language=ru-RU&page=1"
+        return self.session.get(url=request, headers=headers).json()['results'][0]
     
     def get_image_bin(self, image_path: str):
         url = image_path
@@ -102,7 +102,7 @@ class DataProvider:
             query += sql.SQL(" AND ") + sql.SQL(" AND ").join(conditions)
 
         query += sql.SQL(" GROUP BY m.id")
-        query += sql.SQL(f" ORDER BY {order_by if order_by else 'm.release_date'} {order_dir}")
+        query += sql.SQL(f" ORDER BY {order_by[0] if order_by else 'm.release_date'} {order_dir}")
 
         rows = self.db_request(query, params=params)
 
@@ -246,6 +246,27 @@ class DataProvider:
                 'query_day': query_day,
                 'favorite': favorite,
                 'watchlist': watchlist}
+    
+    def get_credits(self, id):
+        actors = []
+        director = None
+        credits_url = f"https://api.themoviedb.org/3/movie/{id}/credits?language=ru-RU"
+        credits_response = self.session.get(credits_url, headers=headers).json()
+        cast: list = credits_response['cast']
+        crew = credits_response['crew']
+        credits_response = cast + crew
+        for credit in credits_response:
+            name = credit['name']
+            if self.is_cyrillic(name):
+                ns = name.split()
+                if len(ns) < 2:
+                    continue
+                if credit['known_for_department'] == 'Acting':
+                    actors.append((credit['id'], ns[0], ns[1]))
+                elif credit['known_for_department'] == 'Directing':
+                    director = [credit['id'], ns[0], ns[1]]
+                    break
+        return actors, director
 
     def get_data(self, countries):
         burl = "https://api.themoviedb.org/3/trending/movie/week?language=ru-RU&page="

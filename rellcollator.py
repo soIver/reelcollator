@@ -114,7 +114,7 @@ class ParameterPanel(QWidget):
             param_key = id
             text = self.values.get(param_key)
         if not param_key:
-            if not self.ext_not_checked is None:
+            if not self.ext_not_checked is None and text:
                 self.ext_not_checked()
             else:
                 self.param_edit.clear()
@@ -206,10 +206,11 @@ class MoviePage(QWidget):
             self.poster.setAlignment(Qt.AlignCenter)
             
         self.poster_link = QLineEdit(self.poster_link_txt)
+        self.poster_link.returnPressed.connect(self.update_poster)
         self.rating = QLabel(self.rating_txt)
         self.rating.sizeHint = lambda: QSize(50, 60)
         self.release_date = QLineEdit(self.release_date_txt)
-        self.release_date.setInputMask("00-00-0000")
+        self.release_date.setInputMask("0000-00-00")
         self.release_date.sizeHint = lambda: QSize(200, 60)
         self.runtime = QLineEdit(str(self.runtime_txt))
         self.runtime.sizeHint = lambda: QSize(150, 60)
@@ -224,19 +225,20 @@ class MoviePage(QWidget):
 
         self.title = QLineEdit(self.title_txt)
         self.title.setObjectName('title-edit')
+        self.title.returnPressed.connect(self.__find_new_movie)
         self.description = QPlainTextEdit(self.description_txt)
         self.country_param = ParameterPanel('Страна:', '', self.release_country_txt, countries, True, lambda: self.update_state('just_changed'))
-        self.director_param = ParameterPanel('Режиссёр:', '', directors.get(self.director), directors, True, lambda: self.update_state('just_changed'))
+        self.director_param = ParameterPanel('Режиссёр:', '', directors.get(self.director), directors, True, lambda: self.update_state('just_changed'), lambda: self.__choice_check('directors'))
         self.director_param.update_checked_params(directors.get(self.director))
-        self.actors_param = ParameterPanel('Актёры:', '', '', actors, False, lambda: self.update_state('just_changed'))
+        self.actors_param = ParameterPanel('Актёры:', '', '', actors, False, lambda: self.update_state('just_changed'), lambda: self.__choice_check('actors'))
         for actor_id in self.actors:
             if not actor_id is None:
                 self.actors_param.update_checked_params('', actor_id)
-        self.genres_param = ParameterPanel('Жанры:', '', '', genres, False, lambda: self.update_state('just_changed'))
+        self.genres_param = ParameterPanel('Жанры:', '', '', genres, False, lambda: self.update_state('just_changed'), lambda: self.__choice_check('genres'))
         for genre_id in self.genres:
             if not genre_id is None:
                 self.genres_param.update_checked_params('', genre_id)
-        self.keywords_param = ParameterPanel('Ключевые слова:', '', '', keywords, False, lambda: self.update_state('just_changed'))
+        self.keywords_param = ParameterPanel('Ключевые слова:', '', '', keywords, False, lambda: self.update_state('just_changed'), lambda: self.__choice_check('keywords'))
         for keyword_id in self.keywords:
             if not keyword_id is None:
                 self.keywords_param.update_checked_params('', keyword_id)
@@ -287,6 +289,111 @@ class MoviePage(QWidget):
 
         self.setLayout(layout)
 
+        self.overlay = QWidget(self)
+        self.overlay.setGeometry(0, 0, 1920, 1200)
+        self.overlay.setStyleSheet("background-color: rgba(0, 0, 0, 150)")
+        self.overlay.close()
+
+    def __find_new_movie(self):
+        movie_data = data_provider.search(self.title.text())
+        if movie_data:
+            movie_id = movie_data.get('id')
+            details_data = data_provider.details(movie_id)
+            new_movie_data = {
+                'name': movie_data.get('title', ''),
+                'overview': movie_data.get('overview', ''),
+                'poster_link': f"https://image.tmdb.org/t/p/original{movie_data.get('poster_path', '')}",
+                'release_date': movie_data.get('release_date', ''),
+                'rating': movie_data.get('vote_average', 0),
+                'revenue': details_data.get('revenue', 0),
+                'runtime': details_data.get('runtime', 0),
+                'release_country': '',
+                'director': '',
+                'actors': [],
+                'genres': movie_data.get('genre_ids', []),
+                'keywords': [],
+                'id': movie_data.get('id', ''),
+            }
+            result = data_provider.db_request(f"SELECT * FROM movies WHERE id = {movie_id}")
+            if result:
+                return
+            app_window.main_window.removeTab(1)
+            app_window.main_window.insertTab(1, MoviePage(new_movie_data), 'Фильм')
+            app_window.main_window.setCurrentIndex(1)
+            app_window.main_window.widget(1).update_poster()
+            app_window.main_window.widget(1).update_state('just_changed')
+            
+    def update_poster(self):
+        try:
+            image_bin = data_provider.get_image_bin(self.poster_link.text())
+            byte_array = QByteArray(image_bin)
+            pixmap = QPixmap()
+            pixmap.loadFromData(byte_array)
+            self.poster.setPixmap(pixmap)
+        except:
+            pass
+
+    def __choice_check(self, parameter: str):
+        match parameter:
+            case 'actors':
+                list_word = 'актёров'
+                text = self.actors_param.param_edit.text()
+            case 'directors':
+                list_word = 'режиссёров'
+                text = self.director_param.param_edit.text()
+            case 'genres':
+                list_word = 'жанров'
+                text = self.genres_param.param_edit.text()
+            case 'keywords':
+                list_word = 'ключевых слов'
+                text = self.keywords_param.param_edit.text()
+
+        self.table_to_add = parameter
+        self.value_to_add = text
+        message = 'Требуется подтверждение'
+        sub_message = f'Значение "{text}" не было найдено в списке {list_word}\nХотите добавить его для использования?'
+        self.overlay.show()
+        self.confirm_dialog = ModalWidget(self, message, sub_message, 'Добавить', 'Не добавлять', self.__add_new_param, self.close_dialog)
+        self.confirm_dialog.show()
+
+    def __add_new_param(self):
+        if self.table_to_add in ('actors', 'directors'):
+            if self.value_to_add.split() == 2:
+                name, surname = self.value_to_add.split()
+                query = f"INSERT INTO {self.table_to_add} (name, surname) VALUES ('{name}', '{surname}')"
+                data_provider.db_request(query, False)
+                query = f"SELECT * FROM {self.table_to_add} WHERE name = '{name}' AND surname = '{surname}'"
+                result = data_provider.db_request(query)[0]
+                if self.table_to_add == 'actors':
+                    actors[result.get('id')] = " ".join(name, surname)
+                    self.actors_param.update_checked_params(" ".join(name, surname))
+                elif self.table_to_add == 'directors':
+                    directors[result.get('id')] = " ".join(name, surname)
+                    self.director_param.update_checked_params(" ".join(name, surname))
+                    self.director_param.param_edit.setText(" ".join(name, surname))
+                    query = f"UPDATE movies SET director = {result.get(id)} WHERE id = {self.movie_id}"
+        else:
+            name = self.value_to_add
+            query = f"INSERT INTO {self.table_to_add} (name) VALUES ('{name}')"
+            data_provider.db_request(query, False)
+
+            query = f"SELECT * FROM {self.table_to_add} WHERE name = '{name}'"
+            result = data_provider.db_request(query)[0]
+            if self.table_to_add == 'genres':
+                genres[result.get('id')] = name
+                self.genres_param.update_checked_params(name)
+                data_provider.db_request(query, False)
+
+            elif self.table_to_add == 'keywords':
+                keywords[result.get('id')] = name
+                self.keywords_param.update_checked_params(name)
+
+        if not self.table_to_add == 'directors':
+            query = f"INSERT INTO movies_{self.table_to_add} VALUES ({self.movie_id}, {result.get('id')})"
+            data_provider.db_request(query, False)
+        self.confirm_dialog.close()
+        self.overlay.close()
+
     def update_state(self, state: str):
         self.state = state
         match self.state:
@@ -312,6 +419,12 @@ class MoviePage(QWidget):
 
     def __save_movie(self):
         self.update_state('just_saved')
+        for value in self.movie_data.values():
+            if isinstance(value, float) < 0 or (not value and not isinstance(value, int)):
+                self.confirm_dialog = ModalWidget(self, 'Действие невозможно', 'Убедитесь, что все значения введены корректно', right_action=self.close_dialog)
+                self.confirm_dialog.show()
+                self.overlay.show()
+                return
         self.movie_data['name'] = self.title.text()
         self.movie_data['overview'] = self.description.toPlainText()
         self.movie_data['rating'] = float(self.rating.text())
@@ -336,9 +449,6 @@ class MoviePage(QWidget):
         data_provider.save_movie(self.movie_data)
 
     def __pre_delete_movie(self):
-        self.overlay = QWidget(self)
-        self.overlay.setGeometry(0, 0, self.width(), self.height())
-        self.overlay.setStyleSheet("background-color: rgba(0, 0, 0, 150)")
         self.overlay.show()
         self.confirm_dialog = ModalWidget(self, "Требуется подтверждение", 
         "Удаление карточки фильма является необратимым\nдействием и влечёт за собой полную потерю\nхранимой в системе информации о фильме",
@@ -359,10 +469,12 @@ class MoviePage(QWidget):
             data_provider.delete_movie(self.movie_id)
 
     def __create_new(self):
-        pass
+        app_window.main_window.removeTab(1)
+        app_window.main_window.insertTab(1, MoviePage(), 'Фильм')
+        app_window.main_window.setCurrentIndex(1)
 
 class ModalWidget(QWidget):
-    def __init__(self, parent: QWidget, main_message_txt: str, sub_message_txt: str, left_title: str, right_title: str, left_action, right_action = None):
+    def __init__(self, parent: QWidget, main_message_txt: str, sub_message_txt: str, left_title: str = None, right_title: str = None, left_action = None, right_action = None):
         super().__init__()
         color_text_light = '#303030'
         color_bg = '#f5f5f5'
@@ -429,14 +541,19 @@ class ModalWidget(QWidget):
         title_layout.addWidget(message)
 
         button_layout = QHBoxLayout()
-        delete_button = QPushButton(left_title)
-        cancel_button = QPushButton(right_title)
-        delete_button.setObjectName('modal-delete')
-        cancel_button.setObjectName('modal-cancel')
-        delete_button.clicked.connect(left_action)
-        cancel_button.clicked.connect(right_action)
+        if right_title:
+            delete_button = QPushButton(left_title)
+            cancel_button = QPushButton(right_title)
+            delete_button.setObjectName('modal-delete')
+            cancel_button.setObjectName('modal-cancel')
+            delete_button.clicked.connect(left_action)
+            cancel_button.clicked.connect(right_action)
+            button_layout.addWidget(delete_button)
+        else:
+            cancel_button = QPushButton('ОК')
+            cancel_button.setObjectName('modal-cancel')
+            cancel_button.clicked.connect(right_action)
 
-        button_layout.addWidget(delete_button)
         button_layout.addWidget(cancel_button)
 
         dialog_layout.addLayout(title_layout)
@@ -911,6 +1028,7 @@ class StatsPage(QWidget):
         users_lo.addWidget(users_actors_widget, 1, 1)
 
         users_widget = QWidget()
+        users_widget.setFixedHeight(700)
         users_widget.setObjectName('stats')
         users_widget.setLayout(users_lo)
         self.user_bttns = ButtonsPanel(self.set_data, {'name': 'месяц', 'value': 'month'}, {'name': 'неделю', 'value': 'week'}, {'name': 'день', 'value': 'day'})
@@ -1061,6 +1179,7 @@ class MainWindow(QTabWidget):
             font-size: 15pt;
             font-family: Calibri;
             font-weight: bold;
+            border-radius: 5%;
         }}
         QLabel#stats {{
             background-color: {color_bg};
