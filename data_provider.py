@@ -3,17 +3,18 @@ from contextlib import closing
 from psycopg2 import sql
 from urllib.parse import quote
 import psycopg2, psycopg2.extras, re, requests, xml.etree.ElementTree as ET
+from decouple import config
 
 base_url = "https://api.themoviedb.org/3!/movie?"
 headers = {
     "accept": "application/json",
-    "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIxMjQ3YTcwYmZmYmYzZGZhMWQzNDAxMWEyOWE4ZjdkMyIsInN1YiI6IjY1ZWMwODhlOWQ4OTM5MDE2MjI5OTM4NCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.OxTkKEPFIGD_iIm522Tj18ERii7aE3Su9_Uc996u3yw"
+    "Authorization": f"Bearer {config('API_TOKEN')}"
 }
 
-dbname='2024_psql_rad'
-user='2024_psql_r_usr'
-password='g9yyJG0bzVNGW3RH'
-host='5.183.188.132'
+dbname = config('DB_NAME')
+user = config('DB_USER')
+password = config('DB_PSWD')
+host = config('DB_HOST')
 
 class DataProvider:
     def __init__(self):
@@ -102,7 +103,7 @@ class DataProvider:
             query += sql.SQL(" AND ") + sql.SQL(" AND ").join(conditions)
 
         query += sql.SQL(" GROUP BY m.id")
-        query += sql.SQL(f" ORDER BY {order_by[0] if order_by else 'm.release_date'} {order_dir}")
+        query += sql.SQL(f" ORDER BY m.{order_by} {order_dir}")
 
         rows = self.db_request(query, params=params)
 
@@ -125,13 +126,79 @@ class DataProvider:
             }
             movies.append(movie)
         return movies
+        
+    def add_favorite(self, user_id: int, movie_id: int):
+        self.db_request(f"INSERT INTO favorite_movies (user_id, movie_id) VALUES ({user_id}, {movie_id})", False)
+
+    def remove_favorite(self, user_id: int, movie_id: int):
+        self.db_request(f"DELETE FROM favorite_movies WHERE user_id = {user_id} AND movie_id = {movie_id}", False)
+
+    def is_favorite(self, user_id: int, movie_id: int) -> bool:
+        result = self.db_request(f"SELECT 1 FROM favorite_movies WHERE user_id = {user_id} AND movie_id = {movie_id}")
+        return bool(result)
+
+    def add_watchlist(self, user_id: int, movie_id: int):
+        self.db_request(f"INSERT INTO watchlist (user_id, movie_id) VALUES ({user_id}, {movie_id})", False)
+
+    def remove_watchlist(self, user_id: int, movie_id: int):
+        self.db_request(f"DELETE FROM watchlist WHERE user_id = {user_id} AND movie_id = {movie_id}", False)
+
+    def is_watchlist(self, user_id: int, movie_id: int) -> bool:
+        result = self.db_request(f"SELECT 1 FROM watchlist WHERE user_id = {user_id} AND movie_id = {movie_id}")
+        return bool(result)
     
-    def save_movie(self, movie_data: dict):
-        query = sql.SQL('''
-            UPDATE movies 
-            SET name = %s, release_date = %s, release_country = %s, poster_link = %s, 
-                rating = %s, revenue = %s, runtime = %s, director = %s, overview = %s
-            WHERE id = %s
+    def get_movies_from_list(self, user_id: int, list_name: str) -> list[dict]:
+        query = f"""
+        SELECT m.id, m.name, m.release_date, m.release_country, m.poster_link, m.rating, m.revenue, m.runtime, m.director, m.overview,
+               array_agg(DISTINCT a.id) AS actors,
+               array_agg(DISTINCT g.id) AS genres,
+               array_agg(DISTINCT k.id) AS keywords
+        FROM movies m
+        LEFT JOIN {list_name} fm ON m.id = fm.movie_id
+        LEFT JOIN movies_actors ma ON m.id = ma.movie_id
+        LEFT JOIN actors a ON ma.actor_id = a.id
+        LEFT JOIN movies_genres mg ON m.id = mg.movie_id
+        LEFT JOIN genres g ON mg.genre_id = g.id
+        LEFT JOIN movies_keywords mk ON m.id = mk.movie_id
+        LEFT JOIN keywords k ON mk.keyword_id = k.id
+        WHERE fm.user_id = {user_id}
+        GROUP BY m.id
+        """
+        rows = self.db_request(query)
+        movies = []
+        for row in rows:
+            movie = {
+                'id': row['id'],
+                'name': row['name'],
+                'release_date': row['release_date'],
+                'release_country': row['release_country'],
+                'poster_link': row['poster_link'],
+                'rating': round(row['rating'], 1),
+                'revenue': row['revenue'],
+                'runtime': row['runtime'],
+                'director': row['director'],
+                'overview': row['overview'],
+                'actors': row['actors'],
+                'genres': row['genres'],
+                'keywords': row['keywords']
+            }
+            movies.append(movie)
+        return movies
+    
+    def save_movie(self, movie_data: dict, is_new: bool):
+        if is_new:
+            query = sql.SQL('''
+                UPDATE movies 
+                SET name = %s, release_date = %s, release_country = %s, poster_link = %s, 
+                    rating = %s, revenue = %s, runtime = %s, director = %s, overview = %s
+                WHERE id = %s
+            ''')
+        else:
+            query = sql.SQL('''
+            INSERT INTO movies (name, release_date, release_country, poster_link, 
+                rating, revenue, runtime, director, overview)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            
         ''')
         params = [
             movie_data.get('name'),
@@ -232,6 +299,48 @@ class DataProvider:
         pattern = re.compile(r'^[а-яА-ЯёЁ\s-]+$')
         return bool(pattern.match(text))
     
+    def update_query(self, user_id, film_name, lower_date, upper_date, film_release_country, director, date, actors, genres, keywords):
+        params = {
+            'user_id': user_id,
+            'film_name': film_name,
+            'lower_date': lower_date,
+            'upper_date': upper_date,
+            'film_release_country': film_release_country,
+            'director': director,
+            'date': date
+        }
+
+        filtered_params = {k: v for k, v in params.items() if v is not None}
+
+        columns = ', '.join(filtered_params.keys())
+        placeholders = ', '.join(['%s'] * len(filtered_params))
+        query = f"""
+            INSERT INTO queries ({columns})
+            VALUES ({placeholders})
+            RETURNING id;
+        """
+
+        result = self.db_request(query, params=tuple(filtered_params.values()))
+        query_id = result[0].get('id')
+
+        for actor_id in actors or []:
+            self.db_request("""
+                INSERT INTO query_actors (query_id, actor_id)
+                VALUES (%s, %s);
+            """, params=(query_id, actor_id))
+
+        for genre_id in genres or []:
+            self.db_request("""
+                INSERT INTO query_genres (query_id, genre_id)
+                VALUES (%s, %s);
+            """, params=(query_id, genre_id))
+
+        for keyword_id in keywords or []:
+            self.db_request("""
+                INSERT INTO query_keywords (query_id, keyword_id)
+                VALUES (%s, %s);
+            """, params=(query_id, keyword_id))
+            
     def get_stats(self) -> dict[str, int]:
         usr_cnt = len(self.db_request(f'SELECT * FROM users'))
         query_month = len(self.db_request(f"SELECT * FROM queries WHERE date > CURRENT_DATE - '1 month':: interval"))

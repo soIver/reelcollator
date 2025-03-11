@@ -33,7 +33,7 @@ class ScaledLabel(QLabel):
         self.setScaledContents(False)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.setMaximumSize(600, 800)
-        self.setAlignment(Qt.AlignLeft)
+        self.setAlignment(Qt.AlignCenter)
 
     def setPixmap(self, pixmap):
         self.pixmap_original = pixmap
@@ -178,7 +178,7 @@ class ParameterPanel(QWidget):
                     break
 
 class MoviePage(QWidget):
-    def __init__(self, movie_data: dict[str] = {}, poster: QPixmap = None):
+    def __init__(self, movie_data: dict[str] = {}, poster: QPixmap = None, is_new: bool = False):
         super().__init__()
         self.poster_img = poster
         self.title_txt = movie_data.get('name', '')
@@ -204,6 +204,8 @@ class MoviePage(QWidget):
         if self.poster_img:
             self.poster.setPixmap(self.poster_img)
             self.poster.setAlignment(Qt.AlignCenter)
+        else:
+            self.poster.setText('Обложка не найдена')
             
         self.poster_link = QLineEdit(self.poster_link_txt)
         self.poster_link.returnPressed.connect(self.update_poster)
@@ -215,6 +217,7 @@ class MoviePage(QWidget):
         self.runtime = QLineEdit(str(self.runtime_txt))
         self.runtime.sizeHint = lambda: QSize(150, 60)
         self.revenue = QLineEdit(str(self.revenue_txt))
+        self.revenue.setMaxLength(19)
         self.revenue.sizeHint = lambda: QSize(150, 60)
         self.create_btn = CustomPushButton('Создать новую карточку фильма')
         self.create_btn.clicked.connect(self.__create_new)
@@ -318,7 +321,7 @@ class MoviePage(QWidget):
             if result:
                 return
             app_window.main_window.removeTab(1)
-            app_window.main_window.insertTab(1, MoviePage(new_movie_data), 'Фильм')
+            app_window.main_window.insertTab(1, MoviePage(new_movie_data, is_new=True), 'Фильм')
             app_window.main_window.setCurrentIndex(1)
             app_window.main_window.widget(1).update_poster()
             app_window.main_window.widget(1).update_state('just_changed')
@@ -331,7 +334,8 @@ class MoviePage(QWidget):
             pixmap.loadFromData(byte_array)
             self.poster.setPixmap(pixmap)
         except:
-            pass
+            self.poster.setText('Обложка не найдена')
+
 
     def __choice_check(self, parameter: str):
         match parameter:
@@ -463,14 +467,14 @@ class MoviePage(QWidget):
         self.overlay.close()
         self.confirm_dialog.close()
         app_window.main_window.removeTab(1)
-        app_window.main_window.insertTab(1, MoviePage(), 'Фильм')
+        app_window.main_window.insertTab(1, MoviePage(is_new=True), 'Фильм')
         app_window.main_window.setCurrentIndex(1)
         if self.movie_id:
             data_provider.delete_movie(self.movie_id)
 
     def __create_new(self):
         app_window.main_window.removeTab(1)
-        app_window.main_window.insertTab(1, MoviePage(), 'Фильм')
+        app_window.main_window.insertTab(1, MoviePage(is_new = True), 'Фильм')
         app_window.main_window.setCurrentIndex(1)
 
 class ModalWidget(QWidget):
@@ -822,7 +826,7 @@ class SearchPage(QWidget):
             country=[str(id) for id in self.country_panel.checked_params.keys()],
             release_date_gte='-'.join(release_date_gte),
             release_date_lte='-'.join(release_date_lte),
-            order_by=[str(id) for id in self.sort_panel.checked_params.keys()],
+            order_by= list(self.sort_panel.checked_params.keys())[0],
             order_dir=self.sort_asc_desc.value
         )
         self.movies = {}
@@ -1181,6 +1185,14 @@ class MainWindow(QTabWidget):
             font-weight: bold;
             border-radius: 5%;
         }}
+        ScaledLabel {{
+            background-color: {color_bg};
+            color: {color_setting};
+            font-size: 15pt;
+            font-family: Calibri;
+            font-weight: bold;
+            border-radius: 5%;
+        }}
         QLabel#stats {{
             background-color: {color_bg};
             color: {color_text_light};
@@ -1265,7 +1277,7 @@ class AppWindow(QGraphicsView):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWindowTitle("Reelcollator")
         self.setMinimumSize(720, 480)
-        self.main_window = MainWindow(Поиск = SearchPage(), Фильм = MoviePage(), Статистика = StatsPage())
+        self.main_window = MainWindow(Поиск = SearchPage(), Фильм = MoviePage(is_new=True), Статистика = StatsPage())
         scene = QGraphicsScene()
         self.awidth = QDesktopWidget().width() - 20
         self.aheight = QDesktopWidget().height() - 130
@@ -1304,15 +1316,13 @@ directors: dict[int, str] = {}
 actors: dict[int, str] = {}
 countries: dict[str, str] = {}
 
-data_free = False
-if not data_free:
-    countries: dict[str, str] = data_provider.get_countries()
-    for param in ('genres', 'keywords', 'directors', 'actors'):
-        for row in data_provider.db_request(f'SELECT * FROM {param}'):
-            if param in ('genres', 'keywords'):
-                locals()[param][row.get('id')] = row.get('name')
-            else:
-                locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])
+countries: dict[str, str] = data_provider.get_countries()
+for param in ('genres', 'keywords', 'directors', 'actors'):
+    for row in data_provider.db_request(f'SELECT * FROM {param}'):
+        if param in ('genres', 'keywords'):
+            locals()[param][row.get('id')] = row.get('name')
+        else:
+            locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])
 
 app = QApplication(sys.argv)
 icons = {}

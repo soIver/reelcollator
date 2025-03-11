@@ -1,6 +1,7 @@
 import asyncio
-from bot.bot import bot, dp
-from bot.handlers import router
+from bot import bot
+from bot import dp
+from bot_handlers import router
 
 async def main():
     dp.include_router(router)
