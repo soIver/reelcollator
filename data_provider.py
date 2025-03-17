@@ -34,24 +34,12 @@ class DataProvider:
         url = image_path
         response = self.session.get(url, stream=True, timeout=20)
         return response.content
-            
-    def get_countries(self):
-        url = "https://www.artlebedev.ru/country-list/xml/"
-        response = requests.get(url)
-        root = ET.fromstring(response.content)
-        countries = {}
-        for country in root.findall('country'):
-            country_name = country.find('name').text
-            country_id = country.find('alpha2').text
-            if country_name:
-                countries[country_id] = country_name
-        return countries
 
     def search_movies(self, 
         genres_included=None, genres_excluded=None, keywords_included=None, 
         keywords_excluded=None, actors=None, director=None, title_part=None, 
         country=None, release_date_gte=None, release_date_lte=None,
-        order_by=None, order_dir='DESC'):
+        order_by=None, order_dir=None):
 
         query = sql.SQL("""
         SELECT m.id, m.name, m.release_date, m.release_country, m.poster_link, m.rating, m.revenue, m.runtime, m.director, m.overview,
@@ -126,26 +114,63 @@ class DataProvider:
             }
             movies.append(movie)
         return movies
-        
-    def add_favorite(self, user_id: int, movie_id: int):
-        self.db_request(f"INSERT INTO favorite_movies (user_id, movie_id) VALUES ({user_id}, {movie_id})", False)
+    
+    def get_actor_names(self, actor_ids: list[int]) -> list[str]:
+        if not actor_ids:
+            return []
+        query = sql.SQL("SELECT (name || ' ' || surname) as name FROM actors WHERE id IN %s")
+        rows = self.db_request(query, params=(tuple(actor_ids),))
+        return [row['name'] for row in rows]
+    
+    def get_director_name(self, director_id: int) -> list[str]:
+        query = sql.SQL("SELECT (name || ' ' || surname) as name FROM directors WHERE id = %s")
+        rows = self.db_request(query, params=(director_id,))
+        return rows[0].get('name')
+    
+    def get_country_name(self, country_id: int) -> list[str]:
+        query = sql.SQL("SELECT name FROM countries WHERE id = %s")
+        rows = self.db_request(query, params=(country_id,))
+        return rows[0].get('name')
 
-    def remove_favorite(self, user_id: int, movie_id: int):
-        self.db_request(f"DELETE FROM favorite_movies WHERE user_id = {user_id} AND movie_id = {movie_id}", False)
+    def get_genre_names(self, genre_ids: list[int]) -> list[str]:
+        if not genre_ids:
+            return []
+        query = sql.SQL("SELECT name FROM genres WHERE id IN %s")
+        rows = self.db_request(query, params=(tuple(genre_ids),))
+        return [row['name'] for row in rows]
 
-    def is_favorite(self, user_id: int, movie_id: int) -> bool:
-        result = self.db_request(f"SELECT 1 FROM favorite_movies WHERE user_id = {user_id} AND movie_id = {movie_id}")
+    def get_keyword_names(self, keyword_ids: list[int]) -> list[str]:
+        if not keyword_ids:
+            return []
+        query = sql.SQL("SELECT name FROM keywords WHERE id IN %s")
+        rows = self.db_request(query, params=(tuple(keyword_ids),))
+        return [row['name'] for row in rows]
+    
+    def add_to_list(self, user_id: int, movie_id: int, list_name: str):
+        self.db_request(f"INSERT INTO {list_name} (user_id, movie_id) VALUES ({user_id}, {movie_id})", False)
+
+    def remove_from_list(self, user_id: int, movie_id: int, list_name: str):
+        self.db_request(f"DELETE FROM {list_name} WHERE user_id = {user_id} AND movie_id = {movie_id}", False)
+
+    def is_in_list(self, user_id: int, movie_id: int, list_name: str) -> bool:
+        result = self.db_request(f"SELECT 1 FROM {list_name} WHERE user_id = {user_id} AND movie_id = {movie_id}")
         return bool(result)
-
-    def add_watchlist(self, user_id: int, movie_id: int):
-        self.db_request(f"INSERT INTO watchlist (user_id, movie_id) VALUES ({user_id}, {movie_id})", False)
-
-    def remove_watchlist(self, user_id: int, movie_id: int):
-        self.db_request(f"DELETE FROM watchlist WHERE user_id = {user_id} AND movie_id = {movie_id}", False)
-
-    def is_watchlist(self, user_id: int, movie_id: int) -> bool:
-        result = self.db_request(f"SELECT 1 FROM watchlist WHERE user_id = {user_id} AND movie_id = {movie_id}")
-        return bool(result)
+    
+    def get_params_by_page(self, param_name: str, page: int = 0, page_len: int = 10, get_all: bool = False) -> list[dict]:
+        attrs = 'id, name'
+        match param_name:
+            case 'actors' | 'director':
+                attrs = "id, (name || ' ' || surname) as name"
+        match param_name:
+            case 'director':
+                param_name += 's'
+            case 'country':
+                param_name = 'countries'
+        if get_all:
+            query = f"SELECT {attrs} FROM {param_name}"
+        else:
+            query = f"SELECT {attrs} FROM {param_name} LIMIT {page_len} OFFSET {page * page_len}"
+        return self.db_request(query)
     
     def get_movies_from_list(self, user_id: int, list_name: str) -> list[dict]:
         query = f"""
@@ -295,11 +320,33 @@ class DataProvider:
                     result = cursor.fetchall()
         return result
     
-    def is_cyrillic(self, text):
-        pattern = re.compile(r'^[а-яА-ЯёЁ\s-]+$')
-        return bool(pattern.match(text))
+    def set_movie_score(self, user_id: int, movie_id: int, score: int):
+        self.db_request(f"""
+            INSERT INTO movies_scores (user_id, movie_id, score)
+            VALUES ({user_id}, {movie_id}, {score})
+            ON CONFLICT (user_id, movie_id) DO UPDATE
+            SET score = EXCLUDED.score
+        """, False)
+
+    def get_movie_score(self, movie_id: int, user_id: int):
+        result = self.db_request(f"""
+            SELECT score FROM movies_scores WHERE
+            user_id = {user_id} AND movie_id = {movie_id}
+        """)
+        if bool(result):
+            return result[0].get('score')
+        return 0
     
-    def update_query(self, user_id, film_name, lower_date, upper_date, film_release_country, director, date, actors, genres, keywords):
+    def get_movie_rating(self, movie_id: int):
+        result = self.db_request(f"""
+                SELECT rating FROM movies WHERE
+                id = {movie_id}
+            """)
+        if bool(result):
+            return result[0].get('rating')
+        return 0
+
+    def update_query(self, user_id, film_name, lower_date, upper_date, film_release_country, director, date, actors, genres, genres_no, keywords, keywords_no):
         params = {
             'user_id': user_id,
             'film_name': film_name,
@@ -327,19 +374,31 @@ class DataProvider:
             self.db_request("""
                 INSERT INTO query_actors (query_id, actor_id)
                 VALUES (%s, %s);
-            """, params=(query_id, actor_id))
+            """, get=False, params=(query_id, actor_id))
 
         for genre_id in genres or []:
             self.db_request("""
                 INSERT INTO query_genres (query_id, genre_id)
                 VALUES (%s, %s);
-            """, params=(query_id, genre_id))
+            """, get=False, params=(query_id, genre_id))
+
+        for genre_id in genres_no or []:
+            self.db_request("""
+                INSERT INTO query_genres_no (query_id, genre_id)
+                VALUES (%s, %s);
+            """, get=False, params=(query_id, genre_id))
 
         for keyword_id in keywords or []:
             self.db_request("""
                 INSERT INTO query_keywords (query_id, keyword_id)
                 VALUES (%s, %s);
-            """, params=(query_id, keyword_id))
+            """, get=False, params=(query_id, keyword_id))
+
+        for keyword_id in keywords_no or []:
+            self.db_request("""
+                INSERT INTO query_keywords_no (query_id, keyword_id)
+                VALUES (%s, %s);
+            """, get=False, params=(query_id, keyword_id))
             
     def get_stats(self) -> dict[str, int]:
         usr_cnt = len(self.db_request(f'SELECT * FROM users'))
@@ -376,7 +435,11 @@ class DataProvider:
                     director = [credit['id'], ns[0], ns[1]]
                     break
         return actors, director
-
+    
+    def is_cyrillic(self, text):
+        pattern = re.compile(r'^[а-яА-ЯёЁ\s-]+$')
+        return bool(pattern.match(text))
+    
     def get_data(self, countries):
         burl = "https://api.themoviedb.org/3/trending/movie/week?language=ru-RU&page="
         for i in range(2, 5, 1):

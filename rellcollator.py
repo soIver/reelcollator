@@ -1316,10 +1316,9 @@ directors: dict[int, str] = {}
 actors: dict[int, str] = {}
 countries: dict[str, str] = {}
 
-countries: dict[str, str] = data_provider.get_countries()
-for param in ('genres', 'keywords', 'directors', 'actors'):
+for param in ('genres', 'keywords', 'directors', 'actors', 'countries'):
     for row in data_provider.db_request(f'SELECT * FROM {param}'):
-        if param in ('genres', 'keywords'):
+        if param in ('genres', 'keywords', 'countries'):
             locals()[param][row.get('id')] = row.get('name')
         else:
             locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])

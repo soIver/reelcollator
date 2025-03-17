@@ -4,8 +4,8 @@ from PIL import Image
 import io
 
 from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile, BufferedInputFile, InputMediaPhoto
-from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile, BufferedInputFile, InputMediaPhoto
+from aiogram.filters import CommandStart
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
@@ -13,36 +13,21 @@ from aiogram.fsm.context import FSMContext
 import datetime, traceback
 
 PARAMETER_TRANSLATIONS = {
-    'name': 'Название',
+    'name': 'название',
     'director': 'Режиссёр',
     'country': 'Страна',
     'genres': 'Жанры',
-    'notgenres': 'Нежелательные жанры',
-    'kwords': 'Ключевые слова',
-    'notkwords': 'Нежелательные ключевые слова',
+    'keywords': 'Ключевые слова',
     'actors': 'Актёры',
-    'date': 'Дата выпуска фильма',
+    'date': 'Интервал выпуска',
     'sort': 'Сортировка результатов'
 }
 
 router = Router()
 data_provider = DataProvider()
 
-genres: dict[int, str] = {}
-keywords: dict[int, str] = {}
-directors: dict[int, str] = {}
-actors: dict[int, str] = {}
-countries: dict[str, str] = {}
 sort_by: dict[str, str] = {'rating': 'Рейтинг', 'release_date': 'Дата выхода', 'revenue': 'Сумма сборов'}
 sort_in: dict[str, str] = {'DESC': 'по убыванию', 'ASC': 'по возрастанию'}
-
-countries: dict[str, str] = data_provider.get_countries()
-for param in ('genres', 'keywords', 'directors', 'actors'):
-    for row in data_provider.db_request(f'SELECT * FROM {param}'):
-        if param in ('genres', 'keywords'):
-            locals()[param][row.get('id')] = row.get('name')
-        else:
-            locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])
 
 class States(StatesGroup):
     started = State()
@@ -54,18 +39,6 @@ async def handle_error(action: Message | CallbackQuery, state: FSMContext):
     await state.set_state(States.started)
     await send_message(user_id, "Что-то пошло не так. Пожалуйста, повторите попытку позже.")
     print(traceback.format_exc())
-
-async def delete_inline(message: Message):
-    if message and message.reply_markup:
-        new_markup = InlineKeyboardMarkup(inline_keyboard=[])
-        if message.reply_markup != new_markup:
-            try:
-                await message.edit_reply_markup(reply_markup=new_markup)
-            except TelegramBadRequest as e:
-                if "Bad Request: message is not modified" in e.message:
-                    pass
-                else:
-                    raise e
                 
 async def send_message(user_id: int | str, text: str, markup: InlineKeyboardMarkup | ReplyKeyboardMarkup = None, reply_to: int | str = None, document: FSInputFile = None):
     try:
@@ -98,64 +71,119 @@ async def command_start_handler(message: Message, state: FSMContext):
         user_id = message.from_user.id
         if not data_provider.db_request(f'SELECT * FROM users WHERE id = {user_id}'):
             data_provider.db_request(f'INSERT INTO users VALUES ({user_id})')
+        data = await state.get_data()
+        message_id = data.get('menu_message_id')
+        if message_id is None:
+            await send_message(user_id, 'Доброго времени суток!')
+            message = await send_message(user_id, 'Выберите пункт меню')
+            message_id = message.message_id
+        await state.update_data(menu_message_id = message_id)
+        await set_menu(message_id=message_id, user_id=user_id)
 
-        await send_message(user_id, 'Доброго времени суток!')
-        await send_menu(user_id)
-
-async def send_menu(user_id):
+async def set_menu(call: CallbackQuery = None, state: FSMContext = None, message_id: int = None, user_id: int = None):
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f'Найти фильм', callback_data='search')],
-        [InlineKeyboardButton(text=f'Список понравившегося', callback_data='favorite')],
-        [InlineKeyboardButton(text='Список отложенного', callback_data=f'watchlist')],
+        [InlineKeyboardButton(text=f'🔍 Найти фильм', callback_data='search')],
+        [InlineKeyboardButton(text=f'❤️ Список понравившегося', callback_data='favorite')],
+        [InlineKeyboardButton(text='📌 Список отложенного', callback_data=f'watchlist')],
+        [InlineKeyboardButton(text='🌟 Персональная подборка', callback_data=f'compilation')]
     ])
-    await send_message(user_id, 'Выберите пункт меню 👇', markup)
+    if call:
+        await delete_message(call.message)
+        menu_message_id = await send_message(call.from_user.id, 'Выберите пункт меню', markup)
+        await state.update_data(menu_message_id = menu_message_id)
+    else:
+        try:
+            await bot.edit_message_text(
+                text='Выберите пункт меню',
+                chat_id=user_id,
+                message_id=message_id,
+                reply_markup=markup
+            )
+        except TelegramBadRequest:
+            pass
 
 @router.callback_query(F.data == 'menu')
 async def send_menu_call(call: CallbackQuery, state: FSMContext):
     await state.clear()
-    await delete_message(call.message)
-    await send_menu(call.from_user.id)
+    await set_menu(call, state)
 
 @router.callback_query(F.data == 'search')
 async def search(call: CallbackQuery, state: FSMContext):
-    await delete_message(call.message)
     try:
-        await send_parameters_panel(call, state)
+        await set_parameters_panel(call, state)
     except Exception:
         await handle_error(call, state)
 
-async def send_parameters_panel(call: CallbackQuery, state: FSMContext):
-    user_id = call.from_user.id
+async def get_current_parameters_text(search_params: dict) -> str:
+    text = ''
+    if search_params.get('name'):
+        text += f"🎬 Название: {search_params['name']}\n"
+    if search_params.get('director'):
+        director_id = next(iter(search_params['director'].keys()))
+        director_name = search_params['director'][director_id]
+        text += f"🎥 Режиссёр: {director_name}\n"
+    if search_params.get('country'):
+        country_id = next(iter(search_params['country'].keys()))
+        country_name = search_params['country'][country_id]
+        text += f"🌍 Страна: {country_name}\n"
+    if search_params.get('genres'):
+        genre_names = [name for _, name in search_params['genres'].items()]
+        text += f"🎭 Жанры: {', '.join(genre_names)}\n"
+    if search_params.get('genres-no'):
+        genre_names = [name for _, name in search_params['genres-no'].items()]
+        text += f"🎭🚫 Нежелательные жанры: {', '.join(genre_names)}\n"
+    if search_params.get('keywords'):
+        keyword_names = [name for _, name in search_params['keywords'].items()]
+        text += f"🔑 Ключевые слова: {', '.join(keyword_names)}\n"
+    if search_params.get('keywords-no'):
+        keyword_names = [name for _, name in search_params['keywords-no'].items()]
+        text += f"🔑🚫 Нежелательные ключевые слова: {', '.join(keyword_names)}\n"
+    if search_params.get('actors'):
+        actor_names = [name for _, name in search_params['actors'].items()]
+        text += f"👤 Актёры: {', '.join(actor_names)}\n"
+    if search_params.get('date_gte') and search_params.get('date_lte'):
+        text += f"📅 Интервал выхода: {search_params['date_gte']} - {search_params['date_lte']}\n"
+    if search_params.get('sort_by'):
+        sort_by_value = sort_by.get(search_params['sort_by'], search_params['sort_by'])
+        sort_in_value = sort_in.get(search_params.get('sort_in', 'DESC'), 'DESC')
+        text += f"🔢 Сортировка: {sort_by_value} ({sort_in_value})\n"
+    return text
+
+async def set_parameters_panel(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    search_params = data.get('search_params', {})
+    current_parameters_text = await get_current_parameters_text(search_params)
+
     markup = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text=f'Название', callback_data='parameter_name')],
-    [InlineKeyboardButton(text=f'Режиссёр', callback_data='parameter_director')],
-    [InlineKeyboardButton(text=f'Страна', callback_data='parameter_country')],
-    [InlineKeyboardButton(text='Жанры', callback_data=f'parameter_genres')],
-    [InlineKeyboardButton(text=f'Нежелательные жанры', callback_data='parameter_notgenres')],
-    [InlineKeyboardButton(text=f'Ключевые слова', callback_data='parameter_kwords')],
-    [InlineKeyboardButton(text=f'Нежелательные ключевые слова', callback_data='parameter_notkwords')],
-    [InlineKeyboardButton(text='Актёры', callback_data=f'parameter_actors')],
-    [InlineKeyboardButton(text='Дата выпуска фильма', callback_data=f'parameter_date')],
-    [InlineKeyboardButton(text='Сортировка результатов', callback_data=f'set_sorting')],
-    [InlineKeyboardButton(text='Вернуться в меню', callback_data=f'menu')],
-])
-    await send_message(user_id, 'Выберите параметр из приведённых ниже 👇', markup)
+        [InlineKeyboardButton(text=f'Название', callback_data='set_title')],
+        [InlineKeyboardButton(text=f'Режиссёр', callback_data='parameter_director')],
+        [InlineKeyboardButton(text=f'Страна', callback_data='parameter_country')],
+        [InlineKeyboardButton(text='Жанры', callback_data=f'parameter_genres')],
+        [InlineKeyboardButton(text=f'Нежелательные жанры', callback_data='parameter_genres-no')],
+        [InlineKeyboardButton(text=f'Ключевые слова', callback_data='parameter_keywords')],
+        [InlineKeyboardButton(text=f'Нежелательные ключевые слова', callback_data='parameter_keywords-no')],
+        [InlineKeyboardButton(text='Актёры', callback_data=f'parameter_actors')],
+        [InlineKeyboardButton(text='Интервал выпуска фильма', callback_data=f'set_interval')],
+        [InlineKeyboardButton(text='Сортировка результатов', callback_data=f'set_sorting')],
+        [InlineKeyboardButton(text='🔍 Начать поиск', callback_data=f'start_search')],
+        [InlineKeyboardButton(text='↩️ Вернуться в меню', callback_data=f'menu')]
+    ])
+    await bot.edit_message_text(
+        text=f"Выбранные параметры: {current_parameters_text}" if current_parameters_text else "Выберите параметр:",
+        chat_id=call.from_user.id,
+        message_id=call.message.message_id,
+        reply_markup=markup
+    )
 
 @router.callback_query(F.data.startswith('parameter_'))
 async def select_parameter(call: CallbackQuery, state: FSMContext):
-    await delete_message(call.message)
     try:
-        user_id = call.from_user.id
         param_type = call.data.split('_')[1]
         
         await state.update_data(param_type=param_type)
         await state.set_state(States.enter_param)
 
-        param_name = PARAMETER_TRANSLATIONS.get(param_type, param_type)
-        markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text='Вернуться к выбору параметра', callback_data=f'search')],
-        ])
-        await send_message(user_id, f'Введите значение для параметра "{param_name}" или выберите один из предложенных:', markup)
+        await show_parameter_page(call, state)
     except Exception:
         await handle_error(call, state)
 
@@ -169,13 +197,13 @@ async def update_sort_panel_markup(action: Message | CallbackQuery, state: FSMCo
     sort_message_id = data.get('sort_message_id')
 
     sort_by_dict = sort_by.copy()
-    sort_by_dict[sort_by_key] = sort_by_value + ' ✅'
+    sort_by_dict[sort_by_key] = '✅ ' + sort_by_value
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=sort_by_dict.get('rating'), callback_data=f'set_sort_by-rating')],
         [InlineKeyboardButton(text=sort_by_dict.get('release_date'), callback_data=f'set_sort_by-release_date')],
         [InlineKeyboardButton(text=sort_by_dict.get('revenue'), callback_data=f'set_sort_by-revenue')],
         [InlineKeyboardButton(text=f'Сортировать: {sort_in_value}', callback_data=f'change_sort_in')],
-        [InlineKeyboardButton(text='Вернуться к выбору параметра', callback_data=f'search')],
+        [InlineKeyboardButton(text='↩️ Вернуться к выбору параметра', callback_data=f'search')],
     ])
     await bot.edit_message_reply_markup(chat_id=user_id, message_id=sort_message_id, reply_markup=markup)
     return markup
@@ -192,7 +220,7 @@ async def set_sort_py(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == 'set_sorting')
 async def set_sorting(call: CallbackQuery, state: FSMContext):
-    await delete_inline(call.message)
+    await delete_message(call.message)
     try:
         user_id = call.from_user.id
         sort_message = await send_message(user_id, f'Установите флажок возле имени параметра, по которому будет производиться сортировка результатов.\nВы также можете изменить порядок сортировки нажатием на соответствующую кнопку.')
@@ -202,7 +230,7 @@ async def set_sorting(call: CallbackQuery, state: FSMContext):
         await handle_error(call, state)
 
 @router.callback_query(F.data == 'change_sort_in')
-async def select_parameter(call: CallbackQuery, state: FSMContext):
+async def change_sort_in(call: CallbackQuery, state: FSMContext):
     sort_keys = list(sort_in.keys())
     data = await state.get_data()
     sort_in_key = data.get('sort_in_key', 'DESC')
@@ -218,58 +246,112 @@ async def enter_parameter_value(message: Message, state: FSMContext):
     try:
         user_id = message.from_user.id
         data = await state.get_data()
-        param_type = data.get('param_type')
+        param_type: str = data.get('param_type')
+        menu_message_id = data.get('menu_message_id')
         param_value = message.text
+        await bot.delete_message(user_id, menu_message_id)
+        items = data_provider.get_params_by_page(param_type.split('-')[0], get_all=True)
 
-        search_params = data.get('search_params', {})
-        search_params[param_type] = param_value
-        await state.update_data(search_params=search_params)
+        exists = param_value in [item.get('name') for item in items]
+        if exists:
+            item = next(({'id': item['id'], 'name': item['name']} for item in items if item['name'] == param_value), None)
+            if item:
+                await select_item(param_type, {item['id']: item['name']}, state)
+                await show_parameter_page(message, state, param_value)
+        else:
+            relevant_items = []
+            for item in items:
+                if param_value.lower() in item['name'].lower():
+                    relevant_items.append(item)
 
-        markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text='Добавить ещё параметр', callback_data='search')],
-            [InlineKeyboardButton(text='Начать поиск', callback_data='start_search')],
-        ])
-        param_name = PARAMETER_TRANSLATIONS.get(param_type, param_type)
-        await send_message(user_id, f"Параметр '{param_name}' сохранён. Хотите добавить ещё параметр или начать поиск?", markup)
+            if relevant_items:
+                buttons = []
+                for item in relevant_items:
+                    buttons.append([
+                        InlineKeyboardButton(
+                            text=item['name'],
+                            callback_data=f"select_{param_type}_{item['id']}_{item['name']}"
+                        )
+                    ])
+                buttons.append([InlineKeyboardButton(text='↩️ Вернуться к выбору параметра', callback_data='search')])
+
+                markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+                await send_message(
+                    user_id,
+                    f'Найдены следующие варианты для параметра "{PARAMETER_TRANSLATIONS.get(param_type, param_type)}":',
+                    markup
+                )
+            else:
+                await send_message(user_id, "Указанное значение не найдено.")
     except Exception:
         await handle_error(message, state)
 
 @router.callback_query(F.data == 'start_search')
 async def start_search(call: CallbackQuery, state: FSMContext):
-    await delete_inline(call.message)
+    await delete_message(call.message)
     try:
         user_id = call.from_user.id
         data = await state.get_data()
         search_params = data.get('search_params', {})
 
+        genres_included = list(search_params.get('genres', {}).keys())
+        genres_excluded = list(search_params.get('genres-no', {}).keys())
+        keywords_included = list(search_params.get('keywords', {}).keys())
+        keywords_excluded = list(search_params.get('keywords-no', {}).keys())
+        actors = list(search_params.get('actors', {}).keys())
+        director_dict = search_params.get('director', {})
+        director = next(iter(director_dict.keys()), None) if director_dict else None
+        country_dict = search_params.get('country', {})
+        country = next(iter(country_dict.keys()), None) if country_dict else None
+
         movies = data_provider.search_movies(
-            genres_included=search_params.get('genres'),
-            genres_excluded=search_params.get('notgenres'),
-            keywords_included=search_params.get('kwords'),
-            keywords_excluded=search_params.get('notkwords'),
-            actors=search_params.get('actors'),
-            director=search_params.get('director'),
+            genres_included=genres_included,
+            genres_excluded=genres_excluded,
+            keywords_included=keywords_included,
+            keywords_excluded=keywords_excluded,
+            actors=actors,
+            director=director,
             title_part=search_params.get('name'),
-            country=search_params.get('country'),
-            release_date_gte=search_params.get('date_gte'),
-            release_date_lte=search_params.get('date_lte'),
-            order_by=search_params.get('sort_by'),
-            order_dir=search_params.get('sort_in')
+            country=country,
+            release_date_gte=search_params.get('date_gte', '1895-12-28'),
+            release_date_lte=search_params.get('date_lte', '2026-12-12'),
+            order_by=search_params.get('sort_by', 'id'),
+            order_dir=search_params.get('sort_in', 'DESC')
         )
-        
+
         current_date = datetime.datetime.now().strftime('%Y-%m-%d')
-        data_provider.update_query(user_id, search_params.get('name', None), search_params.get('date_gte', '1895-12-28'), search_params.get('date_lte', '2026-12-12'), search_params.get('country', None), search_params.get('director', None), current_date, search_params.get('actors', []), search_params.get('genres', []), search_params.get('notkwords', []))
+        data_provider.update_query(
+            user_id,
+            search_params.get('name', None),
+            search_params.get('date_gte', '1895-12-28'),
+            search_params.get('date_lte', '2026-12-12'),
+            country,
+            director,
+            current_date,
+            actors,
+            genres_included,
+            genres_excluded,
+            keywords_included,
+            keywords_excluded
+        )
+
         if movies:
             await state.update_data(movies=movies, current_index=0)
             await show_movie(user_id, state)
         else:
-            await send_message(user_id, "По вашему запросу ничего не найдено.")
+            menu_message_id = data.get(menu_message_id)
+            bot.delete_message(user_id, menu_message_id)
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='Меню', callback_data=f'menu')]
+            ])
+            menu_message = await send_message(user_id, "По вашему запросу ничего не было найдено.", markup)
+            await state.update_data(menu_message_id = menu_message.message_id)
     except Exception:
         await handle_error(call, state)
 
-async def get_movie_markup(movie_id: int, movie_index: int, movies_len: int, user_id: int):
-    is_favorite = data_provider.is_favorite(user_id, movie_id)
-    is_watchlist = data_provider.is_watchlist(user_id, movie_id)
+async def get_movie_markup(movie_id: int, movie_index: int, movies_len: int, user_id: int, show_details: bool = False):
+    is_favorite = data_provider.is_in_list(user_id, movie_id, 'favorite_movies')
+    is_watchlist = data_provider.is_in_list(user_id, movie_id, 'watchlist')
 
     inline_keyboard_first = []
     if movie_index > 0:
@@ -289,11 +371,18 @@ async def get_movie_markup(movie_id: int, movie_index: int, movies_len: int, use
                 callback_data=f"toggle_watchlist_{movie_id}"
             ),
         ],
-        [InlineKeyboardButton(text='Подробнее', callback_data=f"movie_{movie_id}")]
+        [
+            InlineKeyboardButton(
+                text='Скрыть детали' if show_details else '👀 Подробнее',
+                callback_data=f"toggle_details_{movie_id}"
+            ),
+        ],
+        [InlineKeyboardButton(text='⭐ Поставить оценку', callback_data=f"rate_movie_{movie_id}")],
+        [InlineKeyboardButton(text='↩️ Вернуться в меню', callback_data=f'menu')]
     ])
     return markup
     
-async def show_movie(user_id: int, state: FSMContext):
+async def show_movie(user_id: int, state: FSMContext, show_details: bool = False, update_score: bool = False):
     data = await state.get_data()
     movies = data.get('movies', [])
     current_index = data.get('current_index', 0)
@@ -303,14 +392,28 @@ async def show_movie(user_id: int, state: FSMContext):
         return
 
     movie: dict = movies[current_index]
+    rating = str(movie['rating'] if not update_score else data_provider.get_movie_rating(movie.get('id')))
+    score = data_provider.get_movie_score(movie.get('id'), user_id)
+    if score:
+        rating += f' (ваша оценка: {score})'
     text = (
         f"🎬 <b>{movie['name']}</b>\n"
         f"📅 Дата выхода: {movie['release_date']}\n"
-        f"🌍 Страна: {movie['release_country']}\n"
-        f"⭐ Рейтинг: {movie['rating']}\n"
+        f"🌍 Страна: {data_provider.get_country_name(movie['release_country'])}\n"
+        f"🎥 Режиссёр: {data_provider.get_director_name(movie['director'])}\n"
+        f"⭐ Рейтинг: {rating}\n"
         f"📝 Описание: {movie['overview']}"
     )
-    markup = await get_movie_markup(movie.get('id'), current_index, len(movies) - 1, user_id)
+    
+    if show_details:
+        text += (
+            f"\n👤 Актёры: {', '.join(data_provider.get_actor_names(movie['actors']))}\n"
+            f"🎭 Жанры: {', '.join(data_provider.get_genre_names(movie['genres']))}\n"
+            f"🔑 Ключевые слова: {', '.join(data_provider.get_keyword_names(movie['keywords']))}\n"
+            f"💵 Сумма сборов: {movie['revenue']}\n"
+        )
+
+    markup = await get_movie_markup(movie.get('id'), current_index, len(movies) - 1, user_id, show_details)
 
     movie_photos: list = data.get('movie_photos', [])
     if current_index < len(movie_photos) and movie_photos:
@@ -324,7 +427,7 @@ async def show_movie(user_id: int, state: FSMContext):
     if file_bin:
         photo = BufferedInputFile(file_bin.getvalue(), filename='photo.png')
         movie_photos.append(photo)
-        await state.update_data(movie_photos = movie_photos)
+        await state.update_data(movie_photos=movie_photos)
 
     if 'movie_message_id' not in data:
         message = await bot.send_photo(user_id, photo, caption=text, reply_markup=markup)
@@ -333,7 +436,7 @@ async def show_movie(user_id: int, state: FSMContext):
         media = InputMediaPhoto(media=photo, caption=text)
         await bot.edit_message_media(
             chat_id=user_id,
-            message_id=data['movie_message_id'],
+            message_id=data.get('movie_message_id'),
             media=media,
             reply_markup=markup
         )
@@ -345,47 +448,190 @@ async def compress_image(byte_arr, quality=50):
         img_byte_arr.seek(0)
         return img_byte_arr
     
-@router.callback_query(F.data.startswith('toggle_favorite_'))
-async def toggle_favorite(call: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith('rate_movie_'))
+async def rate_movie(call: CallbackQuery, state: FSMContext):
     try:
         user_id = call.from_user.id
         movie_id = int(call.data.split('_')[2])
-        data = await state.get_data()
-        current_index = data.get('current_index', 0)
-        movies = data.get('movies', [])
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text='1️⃣', callback_data=f"set_score_{movie_id}_1"),
+                InlineKeyboardButton(text='2️⃣', callback_data=f"set_score_{movie_id}_2"),
+                InlineKeyboardButton(text='3️⃣', callback_data=f"set_score_{movie_id}_3"),
+                InlineKeyboardButton(text='4️⃣', callback_data=f"set_score_{movie_id}_4"),
+                InlineKeyboardButton(text='5️⃣', callback_data=f"set_score_{movie_id}_5"),
+            ],
+            [
+                InlineKeyboardButton(text='6️⃣', callback_data=f"set_score_{movie_id}_6"),
+                InlineKeyboardButton(text='7️⃣', callback_data=f"set_score_{movie_id}_7"),
+                InlineKeyboardButton(text='8️⃣', callback_data=f"set_score_{movie_id}_8"),
+                InlineKeyboardButton(text='9️⃣', callback_data=f"set_score_{movie_id}_9"),
+                InlineKeyboardButton(text='🔟', callback_data=f"set_score_{movie_id}_10"),
+            ]
+        ])
 
-        if data_provider.is_favorite(user_id, movie_id):
-            data_provider.remove_favorite(user_id, movie_id)
-        else:
-            data_provider.add_favorite(user_id, movie_id)
-
-        markup = await get_movie_markup(movie_id, current_index, len(movies) - 1, user_id)
-        await bot.edit_message_reply_markup(
+        await bot.edit_message_caption(
+            caption='Выберите оценку для фильма',
             chat_id=user_id,
-            message_id=data['movie_message_id'],
+            message_id=call.message.message_id,
             reply_markup=markup
         )
     except Exception:
         await handle_error(call, state)
 
-@router.callback_query(F.data.startswith('toggle_watchlist_'))
-async def toggle_watchlist(call: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith('set_score_'))
+async def set_score(call: CallbackQuery, state: FSMContext):
+    try:
+        user_id = call.from_user.id
+        movie_id = int(call.data.split('_')[2])
+        score = int(call.data.split('_')[3])
+        data_provider.set_movie_score(user_id, movie_id, score)
+
+        await show_movie(user_id, state, show_details=True, update_score=True)
+    except Exception:
+        await handle_error(call, state)
+
+@router.callback_query(F.data.startswith('toggle_details_'))
+async def toggle_details(call: CallbackQuery, state: FSMContext):
     try:
         user_id = call.from_user.id
         movie_id = int(call.data.split('_')[2])
         data = await state.get_data()
         current_index = data.get('current_index', 0)
         movies = data.get('movies', [])
+        current_movie = movies[current_index]
 
-        if data_provider.is_watchlist(user_id, movie_id):
-            data_provider.remove_watchlist(user_id, movie_id)
+        if current_movie['id'] == movie_id:
+            show_details = not data.get('show_details', False)
+            await state.update_data(show_details=show_details)
+            await show_movie(user_id, state, show_details)
+    except Exception:
+        await handle_error(call, state)
+
+async def show_parameter_page(action: CallbackQuery | Message, state: FSMContext, last_value: str = None):
+    data = await state.get_data()
+    param_type = data.get('param_type')
+    param_page = data.get('param_page', 0)
+    search_params = data.get('search_params', {})
+    param_type_common = param_type.split('-')[0]
+    param_name = PARAMETER_TRANSLATIONS.get(param_type_common, param_type)
+    if len(param_type.split('-')) > 1:
+        param_name = "нежелательные " + param_name.lower()
+
+    items = data_provider.get_params_by_page(param_type_common, param_page)
+
+    buttons = []
+    for item in items:
+        item_id = item['id']
+        item_name = item['name']
+        is_selected = item_id in search_params.get(param_type, {})
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{'✅ ' if is_selected else ''}{item_name}",
+                callback_data=f"select_{param_type}_{item_id}_{item_name}"
+            )
+        ])
+
+    navigation_buttons = []
+    if param_page > 0:
+        navigation_buttons.append(InlineKeyboardButton(text='⬅️ Предыдущая страница', callback_data=f"prev_page_{param_type}"))
+    if len(items) == 10:
+        navigation_buttons.append(InlineKeyboardButton(text='Следующая страница ➡️', callback_data=f"next_page_{param_type}"))
+    buttons.append(navigation_buttons)
+    buttons.append([InlineKeyboardButton(text='Завершить выбор', callback_data='finish_selection')])
+
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    if isinstance(action, CallbackQuery):
+        await bot.edit_message_text(
+            text=f"Выберите варианты из предложенных ниже или введите собственные:",
+            chat_id=action.from_user.id,
+            message_id=action.message.message_id,
+            reply_markup=markup
+        )
+    else:
+        message = await send_message(action.from_user.id, f'Значение "{last_value}" было успешно добавлено!\nВы можете продолжить выбор', markup)
+        await state.update_data(menu_message_id=message.message_id)
+
+@router.callback_query(F.data.startswith('select_'))
+async def select_item_call(call: CallbackQuery, state: FSMContext):
+    try:
+        _, param_type, item_id, item_name = call.data.split('_')
+        item = {int(item_id): item_name}
+        await select_item(param_type, item, state)
+        await show_parameter_page(call, state)
+
+    except Exception:
+        await handle_error(call, state)
+
+async def select_item(param_type: str, item: dict, state: FSMContext):
+    data = await state.get_data()
+    search_params = data.get('search_params', {})
+    selected_items: dict[str, dict] = search_params.get(param_type, {})
+
+    if param_type in ('director', 'country'):
+        search_params[param_type] = item
+    else:
+        item_id = next(iter(item.keys()))
+        if item_id in selected_items:
+            del selected_items[item_id]
         else:
-            data_provider.add_watchlist(user_id, movie_id)
+            selected_items.update(item)
+        search_params[param_type] = selected_items
+
+    await state.update_data(search_params=search_params)
+
+@router.callback_query(F.data.startswith('prev_page_'))
+async def prev_page(call: CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        param_page = data.get('param_page', 0)
+        if param_page > 0:
+            param_page -= 1
+            await state.update_data(param_page=param_page)
+            await show_parameter_page(call, state)
+    except Exception:
+        await handle_error(call, state)
+
+@router.callback_query(F.data.startswith('next_page_'))
+async def next_page(call: CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        param_page = data.get('param_page', 0)
+        param_page += 1
+        await state.update_data(param_page=param_page)
+        await show_parameter_page(call, state)
+    except Exception:
+        await handle_error(call, state)
+
+@router.callback_query(F.data == 'finish_selection')
+async def finish_selection(call: CallbackQuery, state: FSMContext):
+    try:
+        await state.set_state(States.search_params)
+        await set_parameters_panel(call, state)
+    except Exception:
+        await handle_error(call, state)
+
+@router.callback_query(F.data.startswith('toggle_'))
+async def toggle_list(call: CallbackQuery, state: FSMContext):
+    try:
+        user_id = call.from_user.id
+        list_name = call.data.split('_')[1]
+        if list_name == 'favorite':
+            list_name += '_movies'
+        movie_id = int(call.data.split('_')[2])
+        data = await state.get_data()
+        current_index = data.get('current_index', 0)
+        movies = data.get('movies', [])
+
+        if data_provider.is_in_list(user_id, movie_id, list_name):
+            data_provider.remove_from_list(user_id, movie_id, list_name)
+        else:
+            data_provider.add_to_list(user_id, movie_id, list_name)
 
         markup = await get_movie_markup(movie_id, current_index, len(movies) - 1, user_id)
         await bot.edit_message_reply_markup(
             chat_id=user_id,
-            message_id=data['movie_message_id'],
+            message_id=call.message.message_id,
             reply_markup=markup
         )
     except Exception:
