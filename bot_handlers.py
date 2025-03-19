@@ -1,7 +1,7 @@
 from data_provider import DataProvider
 from bot import bot
 from PIL import Image
-import io
+import io, re
 
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile, BufferedInputFile, InputMediaPhoto
@@ -33,6 +33,8 @@ class States(StatesGroup):
     started = State()
     enter_param = State()
     search_params = State()
+    enter_title = State()
+    enter_interval = State()
 
 async def handle_error(action: Message | CallbackQuery, state: FSMContext):
     user_id = action.from_user.id
@@ -115,7 +117,7 @@ async def search(call: CallbackQuery, state: FSMContext):
         await handle_error(call, state)
 
 async def get_current_parameters_text(search_params: dict) -> str:
-    text = ''
+    text = '\n'
     if search_params.get('name'):
         text += f"🎬 Название: {search_params['name']}\n"
     if search_params.get('director'):
@@ -149,7 +151,7 @@ async def get_current_parameters_text(search_params: dict) -> str:
         text += f"🔢 Сортировка: {sort_by_value} ({sort_in_value})\n"
     return text
 
-async def set_parameters_panel(call: CallbackQuery, state: FSMContext):
+async def set_parameters_panel(action: CallbackQuery | Message, state: FSMContext):
     data = await state.get_data()
     search_params = data.get('search_params', {})
     current_parameters_text = await get_current_parameters_text(search_params)
@@ -168,12 +170,95 @@ async def set_parameters_panel(call: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text='🔍 Начать поиск', callback_data=f'start_search')],
         [InlineKeyboardButton(text='↩️ Вернуться в меню', callback_data=f'menu')]
     ])
-    await bot.edit_message_text(
-        text=f"Выбранные параметры: {current_parameters_text}" if current_parameters_text else "Выберите параметр:",
-        chat_id=call.from_user.id,
-        message_id=call.message.message_id,
-        reply_markup=markup
-    )
+    text = f"Выбранные параметры: {current_parameters_text}" if current_parameters_text else "Выберите параметр:"
+    if isinstance(action, CallbackQuery):
+        await bot.edit_message_text(
+            text=text,
+            chat_id=action.from_user.id,
+            message_id=action.message.message_id,
+            reply_markup=markup
+        )
+    else:
+        menu_message_id = data.get('menu_message_id')
+        await bot.delete_message(action.from_user.id, menu_message_id)
+        message = await send_message(action.from_user.id, text, markup)
+        await state.update_data(menu_message_id = message.message_id)
+
+@router.callback_query(F.data == 'set_title')
+async def set_title(call: CallbackQuery, state: FSMContext):
+    try:
+        await state.set_state(States.enter_title)
+        await bot.edit_message_text(
+            text="Введите название фильма:",
+            chat_id=call.from_user.id,
+            message_id=call.message.message_id,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='↩️ Вернуться к выбору параметра', callback_data='search')]]
+            )
+        )
+    except Exception:
+        await handle_error(call, state)
+
+@router.message(States.enter_title)
+async def enter_title_handler(message: Message, state: FSMContext):
+    try:
+        title = message.text.strip()
+        if title:
+            await state.update_data(param_type = 'title')
+            data = await state.get_data()
+            search_params = data.get('search_params', {})
+            search_params['name'] = title
+            await state.update_data(search_params=search_params)
+
+            await set_parameters_panel(message, state)
+    except Exception:
+        await handle_error(message, state)
+
+@router.callback_query(F.data == 'set_interval')
+async def set_interval(call: CallbackQuery, state: FSMContext):
+    try:
+        await state.update_data(param_type = 'interval')
+        await state.set_state(States.enter_interval)
+        await bot.edit_message_text(
+            text="Введите интервал выхода фильма в формате:\n\n`ГГГГ.ММ.ДД-ГГГГ.ММ.ДД`\n\nПример: `2000.01.01-2020.12.31`",
+            chat_id=call.from_user.id,
+            message_id=call.message.message_id,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='↩️ Вернуться к выбору параметра', callback_data='search')]]
+            )
+        )
+    except Exception:
+        await handle_error(call, state)
+
+@router.message(States.enter_interval)
+async def enter_interval_handler(message: Message, state: FSMContext):
+    try:
+        user_id = message.from_user.id
+        interval = message.text.strip()
+
+        if re.match(r'^\d{4}\.\d{2}\.\d{2}-\d{4}\.\d{2}\.\d{2}$', interval):
+            date_gte, date_lte = interval.split('-')
+            date_gte = date_gte.replace('.', '-')
+            date_lte = date_lte.replace('.', '-')
+
+            data = await state.get_data()
+            search_params = data.get('search_params', {})
+            search_params['date_gte'] = date_gte
+            search_params['date_lte'] = date_lte
+            await state.update_data(search_params=search_params)
+
+            await set_parameters_panel(message, state)
+
+        else:
+            await send_message(
+                user_id,
+                "Неправильный формат интервала. Попробуйте снова или вернитесь к выбору параметра.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text='↩️ Вернуться к выбору параметра', callback_data='search')]]
+                )
+            )
+    except Exception:
+        await handle_error(message, state)
 
 @router.callback_query(F.data.startswith('parameter_'))
 async def select_parameter(call: CallbackQuery, state: FSMContext):
@@ -352,7 +437,7 @@ async def start_search(call: CallbackQuery, state: FSMContext):
 async def get_movie_markup(movie_id: int, movie_index: int, movies_len: int, user_id: int, show_details: bool = False):
     is_favorite = data_provider.is_in_list(user_id, movie_id, 'favorite_movies')
     is_watchlist = data_provider.is_in_list(user_id, movie_id, 'watchlist')
-
+    
     inline_keyboard_first = []
     if movie_index > 0:
         inline_keyboard_first.append(InlineKeyboardButton(text='⬅️ Предыдущий', callback_data='prev_movie'))
@@ -384,6 +469,7 @@ async def get_movie_markup(movie_id: int, movie_index: int, movies_len: int, use
     
 async def show_movie(user_id: int, state: FSMContext, show_details: bool = False, update_score: bool = False):
     data = await state.get_data()
+    await state.update_data(show_details = show_details)
     movies = data.get('movies', [])
     current_index = data.get('current_index', 0)
 
@@ -406,7 +492,7 @@ async def show_movie(user_id: int, state: FSMContext, show_details: bool = False
     )
     
     if show_details:
-        text += (
+        text = (
             f"\n👤 Актёры: {', '.join(data_provider.get_actor_names(movie['actors']))}\n"
             f"🎭 Жанры: {', '.join(data_provider.get_genre_names(movie['genres']))}\n"
             f"🔑 Ключевые слова: {', '.join(data_provider.get_keyword_names(movie['keywords']))}\n"
@@ -486,8 +572,9 @@ async def set_score(call: CallbackQuery, state: FSMContext):
         movie_id = int(call.data.split('_')[2])
         score = int(call.data.split('_')[3])
         data_provider.set_movie_score(user_id, movie_id, score)
+        data = await state.get_data()
 
-        await show_movie(user_id, state, show_details=True, update_score=True)
+        await show_movie(user_id, state, show_details=data.get('show_details', False), update_score=True)
     except Exception:
         await handle_error(call, state)
 
@@ -691,5 +778,20 @@ async def show_favorite_movies(call: CallbackQuery, state: FSMContext):
             await show_movie(user_id, state)
         else:
             await send_message(user_id, "У вас нет фильмов в списке отложенного.")
+    except Exception:
+        await handle_error(call, state)
+
+@router.callback_query(F.data == 'compilation')
+async def show_compilation(call: CallbackQuery, state: FSMContext):
+    try:
+        user_id = call.from_user.id
+        recommended_movies = data_provider.get_personal_recommendations(user_id)
+        
+        if not recommended_movies:
+            await send_message(user_id, "У нас недостаточно данных для формирования персональной подборки. Пожалуйста, оцените несколько фильмов или добавьте их в избранное.")
+            return
+
+        await state.update_data(movies=recommended_movies, current_index=0)
+        await show_movie(user_id, state)
     except Exception:
         await handle_error(call, state)

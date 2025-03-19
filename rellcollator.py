@@ -8,6 +8,34 @@ from collections import deque, Counter
 from datetime import date
 from functools import partial
 
+class StatsWorkerSignals(QObject):
+    finished = pyqtSignal(dict)
+
+class StatsWorker(QRunnable):
+    def __init__(self, data_provider):
+        super().__init__()
+        self.data_provider = data_provider
+        self.signals = StatsWorkerSignals()
+
+    def run(self):
+        stats = self.data_provider.get_stats()
+        self.signals.finished.emit(stats)
+
+class WorkerSignals(QObject):
+    result = pyqtSignal(list)
+
+class Worker(QRunnable):
+    def __init__(self, fn, *args, **kwargs):
+        super().__init__()
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.signals = WorkerSignals()
+
+    def run(self):
+        result = self.fn(*self.args, **self.kwargs)
+        self.signals.result.emit(result)
+
 class ImageLoader(QRunnable):
     def __init__(self, movie_id, poster_link, callback: QObject):
         super().__init__()
@@ -62,22 +90,40 @@ class ScaledLabel(QLabel):
         }}''')
 
 class ParameterPanel(QWidget):
-    def __init__(self, name: str, placeholder: str, default: str, values: dict[str | int, str], one_value: bool, ext_checked = None, ext_not_checked = None):
+    def __init__(self, name: str, placeholder: str, default: str, one_value: bool, table_name: str, ext_checked = None, ext_not_checked = None, values = None):
         super().__init__()
         self.ext_checked = ext_checked
         self.ext_not_checked = ext_not_checked
         self.checked_params: dict[int, list[int, int]] = {}
+        self.values: dict[int, str] = values if values is not None else {}
         self.current_row, self.current_col = 0, 0
-        self.values = values
         self.one_value = one_value
+        self.table_name = table_name
+        if self.table_name in ('directors', 'actors'):
+            self.name_str = "(name || ' ' || surname) as name"
+        else:
+            self.name_str = 'name'
+
         param_label = QLabel(name)
-        self.completer = QCompleter([value for value in values.values()])
-        self.completer.setCompletionMode(QCompleter.InlineCompletion)
+        self.completer = QCompleter([value for value in self.values.values()])
+        self.completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
         self.param_edit = QLineEdit(default)
         self.param_edit.setMaximumWidth(300)
         self.param_edit.setPlaceholderText(placeholder)
         self.param_edit.setCompleter(self.completer)
         self.param_edit.setObjectName('param-edit')
+        self.param_edit.setMaxLength(31)
+
+        if self.values:
+            self.completer.model().setStringList(list(self.values.values()))
+        else:
+            print(table_name)
+            self.timer = QTimer()
+            self.timer.setInterval(1000)
+            self.timer.setSingleShot(True)
+            self.timer.timeout.connect(self.update_completer)
+            self.param_edit.textChanged.connect(self.timer.start)
+
         self.main_lo = QVBoxLayout()
         child_lo = QHBoxLayout()
         self.completer.activated.connect(lambda: self.update_checked_params(self.param_edit.text()))
@@ -94,31 +140,75 @@ class ParameterPanel(QWidget):
         child_lo.addStretch()
         self.main_lo.addLayout(child_lo)
         self.setLayout(self.main_lo)
-    
+
+    def update_completer(self):
+        text = self.param_edit.text()
+        if text:
+            self.load_suggestions(text)
+
+    def load_suggestions(self, text: str):
+        def fetch_data():
+            if len(self.name_str) == 4:
+                query = f"SELECT id, {self.name_str} FROM {self.table_name} WHERE name ILIKE %s"
+                results = data_provider.db_request(query, params=(f"%{text}%",))
+            else:
+                query = f"SELECT id, {self.name_str} FROM {self.table_name} WHERE (name || ' ' || surname) ILIKE %s"
+                results = data_provider.db_request(query, params=(f"%{text}%",))
+            return results
+
+        def update_ui(results):
+            self.values.clear()
+            for row in results:
+                self.values[row['id']] = row['name']
+            
+            self.completer.model().setStringList(list(self.values.values()))
+            self.completer.complete()
+
+        worker = Worker(fetch_data)
+        worker.signals.result.connect(update_ui)
+        QThreadPool.globalInstance().start(worker)
+
     def update_checked_params(self, text: str, id: int = None):
         if not self.ext_checked is None:
             self.ext_checked()
         if id is None:
-            for key in self.values.keys():
-                if self.values.get(key) == text:
-                    if key not in self.checked_params:
-                        if self.one_value:
-                            self.checked_params = {}
-                            self.checked_params[key] = 0
-                            return
-                        param_key = key
-                        break
-            else:
-                param_key = None
+            param_key = None
+            if not param_key:
+                if len(self.name_str) == 4:
+                    query = f"SELECT id, {self.name_str} FROM {self.table_name} WHERE name ILIKE %s"
+                    results = data_provider.db_request(query, params=(f"%{text}%",))
+                else:
+                    query = f"SELECT id, {self.name_str} FROM {self.table_name} WHERE (name || ' ' || surname) ILIKE %s"
+                    results = data_provider.db_request(query, params=(f"%{text}%",))
+                if bool(results):
+                    if self.one_value:
+                        self.checked_params.clear()
+                        self.checked_params[param_key] = 0
+                        self.param_edit.setText(text)
+                        return
+                    pass
+                else:
+                    if not self.ext_not_checked is None and text:
+                        self.ext_not_checked()
+                    else:
+                        self.param_edit.clear()
+                    return
         else:
+            if not id:
+                return
             param_key = id
-            text = self.values.get(param_key)
-        if not param_key:
-            if not self.ext_not_checked is None and text:
-                self.ext_not_checked()
+            query = f"SELECT {self.name_str} FROM {self.table_name} WHERE id = %s"
+            text = data_provider.db_request(query, params=(id,))
+            if bool(text):
+                text = text[0].get('name')
+                self.values[id] = text
+                if self.one_value:
+                    self.checked_params.clear()
+                    self.checked_params[param_key] = 0
+                    self.param_edit.setText(text)
+                    return
             else:
-                self.param_edit.clear()
-            return
+                return
         self.checked_params[param_key] = (self.current_row, self.current_col)
         new_btn = QPushButton()
         new_btn.setObjectName('deletion')
@@ -188,13 +278,16 @@ class MoviePage(QWidget):
         self.release_date_txt = str(movie_data.get('release_date', ''))
         self.revenue_txt = str(movie_data.get('revenue', 0))
         self.runtime_txt = str(movie_data.get('runtime', 0))
-        self.release_country_txt = movie_data.get('release_country', '')
-        self.director = movie_data.get('director', '')
+        self.country_id = movie_data.get('release_country', '')
+        self.country_name = data_provider.get_country_name(self.country_id)
+        self.director_id = movie_data.get('director', '')
+        self.director_name = data_provider.get_director_name(self.director_id)
         self.actors = movie_data.get('actors', [])
         self.genres = movie_data.get('genres', [])
         self.keywords = movie_data.get('keywords', [])
         self.movie_id = movie_data.get('id', '')
         self.movie_data = movie_data
+        self.is_new = is_new
         self.__init_ui()
         init_state = 'just_saved' if self.movie_id else 'just_created'
         self.update_state(init_state)
@@ -209,6 +302,7 @@ class MoviePage(QWidget):
             
         self.poster_link = QLineEdit(self.poster_link_txt)
         self.poster_link.returnPressed.connect(self.update_poster)
+        self.poster_link.setMaxLength(127)
         self.rating = QLabel(self.rating_txt)
         self.rating.sizeHint = lambda: QSize(50, 60)
         self.release_date = QLineEdit(self.release_date_txt)
@@ -216,9 +310,12 @@ class MoviePage(QWidget):
         self.release_date.sizeHint = lambda: QSize(200, 60)
         self.runtime = QLineEdit(str(self.runtime_txt))
         self.runtime.sizeHint = lambda: QSize(150, 60)
+        self.runtime.setMaxLength(3)
+        self.runtime.setValidator(QIntValidator(0, 9, self))
         self.revenue = QLineEdit(str(self.revenue_txt))
         self.revenue.setMaxLength(19)
         self.revenue.sizeHint = lambda: QSize(150, 60)
+        self.revenue.setValidator(QIntValidator(0, 9, self))
         self.create_btn = CustomPushButton('Создать новую карточку фильма')
         self.create_btn.clicked.connect(self.__create_new)
         self.delete_btn = CustomPushButton('Удалить')
@@ -229,19 +326,21 @@ class MoviePage(QWidget):
         self.title = QLineEdit(self.title_txt)
         self.title.setObjectName('title-edit')
         self.title.returnPressed.connect(self.__find_new_movie)
+        self.title.setMaxLength(63)
         self.description = QPlainTextEdit(self.description_txt)
-        self.country_param = ParameterPanel('Страна:', '', self.release_country_txt, countries, True, lambda: self.update_state('just_changed'))
-        self.director_param = ParameterPanel('Режиссёр:', '', directors.get(self.director), directors, True, lambda: self.update_state('just_changed'), lambda: self.__choice_check('directors'))
-        self.director_param.update_checked_params(directors.get(self.director))
-        self.actors_param = ParameterPanel('Актёры:', '', '', actors, False, lambda: self.update_state('just_changed'), lambda: self.__choice_check('actors'))
+        self.country_param = ParameterPanel('Страна:', '', '', True, 'countries', lambda: self.update_state('just_changed'))
+        self.country_param.update_checked_params('', self.country_id)
+        self.director_param = ParameterPanel('Режиссёр:', '', '', True, 'directors', lambda: self.update_state('just_changed'), lambda: self.__choice_check('directors'))
+        self.director_param.update_checked_params('', self.director_id)
+        self.actors_param = ParameterPanel('Актёры:', '', '', False, 'actors', lambda: self.update_state('just_changed'), lambda: self.__choice_check('actors'))
         for actor_id in self.actors:
             if not actor_id is None:
                 self.actors_param.update_checked_params('', actor_id)
-        self.genres_param = ParameterPanel('Жанры:', '', '', genres, False, lambda: self.update_state('just_changed'), lambda: self.__choice_check('genres'))
+        self.genres_param = ParameterPanel('Жанры:', '', '', False, 'genres', lambda: self.update_state('just_changed'), lambda: self.__choice_check('genres'))
         for genre_id in self.genres:
             if not genre_id is None:
                 self.genres_param.update_checked_params('', genre_id)
-        self.keywords_param = ParameterPanel('Ключевые слова:', '', '', keywords, False, lambda: self.update_state('just_changed'), lambda: self.__choice_check('keywords'))
+        self.keywords_param = ParameterPanel('Ключевые слова:', '', '', False, 'keywords', lambda: self.update_state('just_changed'), lambda: self.__choice_check('keywords'))
         for keyword_id in self.keywords:
             if not keyword_id is None:
                 self.keywords_param.update_checked_params('', keyword_id)
@@ -302,15 +401,16 @@ class MoviePage(QWidget):
         if movie_data:
             movie_id = movie_data.get('id')
             details_data = data_provider.details(movie_id)
+            print(details_data)
             new_movie_data = {
                 'name': movie_data.get('title', ''),
                 'overview': movie_data.get('overview', ''),
                 'poster_link': f"https://image.tmdb.org/t/p/original{movie_data.get('poster_path', '')}",
                 'release_date': movie_data.get('release_date', ''),
-                'rating': movie_data.get('vote_average', 0),
+                'rating': 0,
                 'revenue': details_data.get('revenue', 0),
                 'runtime': details_data.get('runtime', 0),
-                'release_country': '',
+                'release_country': data_provider.get_country_name(alpha2=details_data.get('origin_country')[0]),
                 'director': '',
                 'actors': [],
                 'genres': movie_data.get('genre_ids', []),
@@ -318,7 +418,7 @@ class MoviePage(QWidget):
                 'id': movie_data.get('id', ''),
             }
             result = data_provider.db_request(f"SELECT * FROM movies WHERE id = {movie_id}")
-            if result:
+            if bool(result):
                 return
             app_window.main_window.removeTab(1)
             app_window.main_window.insertTab(1, MoviePage(new_movie_data, is_new=True), 'Фильм')
@@ -362,19 +462,17 @@ class MoviePage(QWidget):
 
     def __add_new_param(self):
         if self.table_to_add in ('actors', 'directors'):
-            if self.value_to_add.split() == 2:
+            if len(self.value_to_add.split()) == 2:
                 name, surname = self.value_to_add.split()
                 query = f"INSERT INTO {self.table_to_add} (name, surname) VALUES ('{name}', '{surname}')"
                 data_provider.db_request(query, False)
                 query = f"SELECT * FROM {self.table_to_add} WHERE name = '{name}' AND surname = '{surname}'"
                 result = data_provider.db_request(query)[0]
                 if self.table_to_add == 'actors':
-                    actors[result.get('id')] = " ".join(name, surname)
-                    self.actors_param.update_checked_params(" ".join(name, surname))
+                    self.actors_param.update_checked_params('', result.get('id'))
                 elif self.table_to_add == 'directors':
-                    directors[result.get('id')] = " ".join(name, surname)
-                    self.director_param.update_checked_params(" ".join(name, surname))
-                    self.director_param.param_edit.setText(" ".join(name, surname))
+                    self.director_param.update_checked_params('', result.get('id'))
+                    self.director_param.param_edit.setText(f"{name} {surname}")
                     query = f"UPDATE movies SET director = {result.get(id)} WHERE id = {self.movie_id}"
         else:
             name = self.value_to_add
@@ -384,17 +482,12 @@ class MoviePage(QWidget):
             query = f"SELECT * FROM {self.table_to_add} WHERE name = '{name}'"
             result = data_provider.db_request(query)[0]
             if self.table_to_add == 'genres':
-                genres[result.get('id')] = name
                 self.genres_param.update_checked_params(name)
                 data_provider.db_request(query, False)
 
             elif self.table_to_add == 'keywords':
-                keywords[result.get('id')] = name
                 self.keywords_param.update_checked_params(name)
 
-        if not self.table_to_add == 'directors':
-            query = f"INSERT INTO movies_{self.table_to_add} VALUES ({self.movie_id}, {result.get('id')})"
-            data_provider.db_request(query, False)
         self.confirm_dialog.close()
         self.overlay.close()
 
@@ -422,35 +515,54 @@ class MoviePage(QWidget):
         self.delete_btn.updateBackgroundColor()
 
     def __save_movie(self):
-        self.update_state('just_saved')
-        for value in self.movie_data.values():
-            if isinstance(value, float) < 0 or (not value and not isinstance(value, int)):
-                self.confirm_dialog = ModalWidget(self, 'Действие невозможно', 'Убедитесь, что все значения введены корректно', right_action=self.close_dialog)
-                self.confirm_dialog.show()
-                self.overlay.show()
-                return
-        self.movie_data['name'] = self.title.text()
-        self.movie_data['overview'] = self.description.toPlainText()
-        self.movie_data['rating'] = float(self.rating.text())
-        self.movie_data['poster_link'] = self.poster_link.text()
-        self.movie_data['release_date'] = self.release_date.text()
-        self.movie_data['revenue'] = int(self.revenue.text())
-        self.movie_data['runtime'] = int(self.runtime.text())
-        self.movie_data['release_country'] = self.country_param.param_edit.text()
-        self.movie_data['director'] = tuple(self.director_param.checked_params.keys())[0]
-        checked_actors = list(self.actors_param.checked_params.keys())
-        checked_genres = list(self.genres_param.checked_params.keys())
-        checked_keywords = list(self.keywords_param.checked_params.keys())
-        self.movie_data['actors_for_insert'] = [actor if actor not in self.actors else None for actor in checked_actors]
-        self.movie_data['actors_for_delete'] = [actor if actor not in checked_actors else None for actor in self.actors]
-        self.movie_data['genres_for_insert'] = [genre if genre not in self.genres else None for genre in checked_genres]
-        self.movie_data['genres_for_delete'] = [genre if genre not in checked_genres else None for genre in self.genres]
-        self.movie_data['keywords_for_insert'] = [keyword if keyword not in self.keywords else None for keyword in checked_keywords]
-        self.movie_data['keywords_for_delete'] = [keyword if keyword not in checked_keywords else None for keyword in self.keywords]
-        self.actors = checked_actors
-        self.genres = checked_genres
-        self.keywords = checked_keywords
-        data_provider.save_movie(self.movie_data)
+        try:
+            if not self.title.text():
+                raise Exception('Укажите название фильма')
+            if self.poster.pixmap() is None or not self.poster_link.text():
+                raise Exception('Укажите корректную ссылку на постер')
+            if len(self.release_date.text()) < 10:
+                raise Exception('Укажите корректную дату выхода фильма')
+            if not list(self.country_param.checked_params.keys()):
+                raise Exception('Укажите страну выхода фильма')
+            if not list(self.director_param.checked_params.keys()):
+                raise Exception('Укажите режиссёра фильма')
+
+            self.movie_data['name'] = self.title.text()
+            self.movie_data['overview'] = self.description.toPlainText()
+            self.movie_data['rating'] = float(self.rating.text())
+            self.movie_data['poster_link'] = self.poster_link.text()
+            self.movie_data['release_date'] = self.release_date.text()
+            try:
+                self.movie_data['revenue'] = int(self.revenue.text())
+            except:
+                raise Exception('Укажите корректную сумму сборов')
+            try:
+                self.movie_data['runtime'] = int(self.runtime.text())
+            except:
+                raise Exception('Укажите корректную сумму сборов')
+            self.movie_data['release_country'] = list(self.country_param.checked_params.keys())[0]
+            self.movie_data['director'] = list(self.director_param.checked_params.keys())[0]
+            checked_actors = list(self.actors_param.checked_params.keys())
+            checked_genres = list(self.genres_param.checked_params.keys())
+            checked_keywords = list(self.keywords_param.checked_params.keys())
+            self.movie_data['actors_for_insert'] = [actor if actor not in self.actors else None for actor in checked_actors]
+            self.movie_data['actors_for_delete'] = [actor if actor not in checked_actors else None for actor in self.actors]
+            self.movie_data['genres_for_insert'] = [genre if genre not in self.genres else None for genre in checked_genres]
+            self.movie_data['genres_for_delete'] = [genre if genre not in checked_genres else None for genre in self.genres]
+            self.movie_data['keywords_for_insert'] = [keyword if keyword not in self.keywords else None for keyword in checked_keywords]
+            self.movie_data['keywords_for_delete'] = [keyword if keyword not in checked_keywords else None for keyword in self.keywords]
+            self.actors = checked_actors
+            self.genres = checked_genres
+            self.keywords = checked_keywords
+            data_provider.save_movie(self.movie_data, self.is_new)
+            self.update_state('just_saved')
+            self.is_new = False
+
+        except Exception as e:
+            self.confirm_dialog = ModalWidget(self, 'Действие невозможно', e.args[0], right_action=self.close_dialog)
+            self.confirm_dialog.show()
+            self.overlay.show()
+            return
 
     def __pre_delete_movie(self):
         self.overlay.show()
@@ -486,14 +598,14 @@ class ModalWidget(QWidget):
         color_deletion = ' #d62828'
         self.setStyleSheet(f'''
         QLabel#main-message {{
-            font-size: 26pt;
+            font-size: 28pt;
             font-weight: bold;
             margin-right: 20px;
             margin-top: 20px;
 
         }}
         QLabel#sub-message {{
-            font-size: 16pt;
+            font-size: 14pt;
             font-weight: normal;
             margin: 20px;
             margin-top: 10px;
@@ -566,10 +678,10 @@ class ModalWidget(QWidget):
         dialog_layout.addLayout(button_layout)
         self.setLayout(dialog_layout)
 
-        dialog_width = 800
+        dialog_width = 400
         dialog_height = 400
         self.setGeometry(
-            (parent.width() - dialog_width) // 2,
+            (parent.width() - 500 - dialog_width) // 2,
             (parent.height() - dialog_height) // 2,
             dialog_width,
             dialog_height
@@ -627,7 +739,8 @@ class MovieCard(QWidget):
     def __open_movie_page(self):
         app_window.main_window.removeTab(1)
         app_window.main_window.insertTab(1, MoviePage(self.movie_data,
-                                            poster = self.poster_copy), 'Фильм')
+                                            poster = self.poster_copy,
+                                            is_new=False), 'Фильм')
         app_window.main_window.setCurrentIndex(1)
 
     def eventFilter(self, source, event):
@@ -716,13 +829,13 @@ class SearchPage(QWidget):
         self.search_bttn.setCursor(Qt.PointingHandCursor)
 
         sort_label = QLabel('Сортировать результаты по')
-        self.sort_panel = ParameterPanel('', '', '', self.sort_params, True)
+        self.sort_panel = ParameterPanel('', '', '', True, '', values = self.sort_params)
         self.sort_panel.setMinimumWidth(250)
         self.sort_panel.setObjectName('param-edit')
         self.sort_asc_desc = ButtonsPanel(None, {'name': '↑', 'value': 'DESC'}, {'name': '↓', 'value': 'ASC'})
 
-        self.director_panel = ParameterPanel('', 'режиссёр', '', directors, True)
-        self.country_panel = ParameterPanel('', 'страна', '', countries, True)
+        self.director_panel = ParameterPanel('', 'режиссёр', '', True, 'directors')
+        self.country_panel = ParameterPanel('', 'страна', '', True, 'countries')
         self.date_edit = QLineEdit(self)
         self.date_edit.setInputMask("00.00.0000-00.00.0000;_")
         self.date_edit.setObjectName('param-edit')
@@ -730,11 +843,11 @@ class SearchPage(QWidget):
         today = today.strftime("%d.%m.%Y")
         self.date_edit.setText(f"28.12.1895-{today}")
 
-        self.genres_panel = ParameterPanel('', 'с жанром', '', genres, False)
-        self.genres_panel_no = ParameterPanel('', 'без жанра', '', genres, False)
-        self.keywords_panel = ParameterPanel('', 'с ключевым словом', '', keywords, False)
-        self.keywords_panel_no = ParameterPanel('', 'без ключевого слова', '', keywords, False)
-        self.actors_panel = ParameterPanel('', 'с актёром', '', actors, False)
+        self.genres_panel = ParameterPanel('', 'с жанром', '', False, 'genres')
+        self.genres_panel_no = ParameterPanel('', 'без жанра', '', False, 'genres')
+        self.keywords_panel = ParameterPanel('', 'с ключевым словом', '', False, 'keywords')
+        self.keywords_panel_no = ParameterPanel('', 'без ключевого слова', '', False, 'keywords')
+        self.actors_panel = ParameterPanel('', 'с актёром', '', False, 'actors')
 
         searchbox_layout = QHBoxLayout()
         searchbox_layout.addWidget(self.search_edit)
@@ -816,17 +929,17 @@ class SearchPage(QWidget):
             self.show_msg('Первая дата интервала выхода фильма не может быть больше второй')
 
         movies = data_provider.search_movies(
-            genres_included=[str(id) for id in self.genres_panel.checked_params.keys()],
-            genres_excluded=[str(id) for id in self.genres_panel_no.checked_params.keys()],
-            keywords_included=[str(id) for id in self.keywords_panel.checked_params.keys()],
-            keywords_excluded=[str(id) for id in self.keywords_panel_no.checked_params.keys()],
-            actors=[str(id) for id in self.actors_panel.checked_params.keys()],
-            director=[str(id) for id in self.director_panel.checked_params.keys()],
+            genres_included=[id for id in self.genres_panel.checked_params.keys()],
+            genres_excluded=[id for id in self.genres_panel_no.checked_params.keys()],
+            keywords_included=[id for id in self.keywords_panel.checked_params.keys()],
+            keywords_excluded=[id for id in self.keywords_panel_no.checked_params.keys()],
+            actors=[id for id in self.actors_panel.checked_params.keys()],
+            director=[id for id in self.director_panel.checked_params.keys()][0] if self.director_panel.checked_params.keys() else None,
             title_part=self.search_edit.text(),
-            country=[str(id) for id in self.country_panel.checked_params.keys()],
+            country=[id for id in self.country_panel.checked_params.keys()][0] if self.country_panel.checked_params.keys() else None,
             release_date_gte='-'.join(release_date_gte),
             release_date_lte='-'.join(release_date_lte),
-            order_by= list(self.sort_panel.checked_params.keys())[0],
+            order_by = list(self.sort_panel.checked_params.keys())[0] if self.sort_panel.checked_params.keys() else "rating",
             order_dir=self.sort_asc_desc.value
         )
         self.movies = {}
@@ -904,17 +1017,29 @@ class ResultsPanel(QStackedWidget):
 class StatsPage(QWidget):
     def __init__(self):
         super().__init__()
+        self.usr_cnt = 0
+        self.favorite = 0
+        self.watchlist = 0
+        self.query_day = 0
+        self.query_week = 0
+        self.query_month = 0
+        self.user_queries_day = {}
+        self.user_queries_week = {}
+        self.user_queries_month = {}
         self.__init_ui()
+        self.set_data()
         self.__update_data()
     
     def __init_ui(self):
         top_lo = QHBoxLayout()
         self.usr_cnt_value = QLabel()
-        self.update_bttn = QPushButton('Обновить данные')
+        self.update_bttn = CustomPushButton('Обновить данные')
         self.update_bttn.clicked.connect(self.__update_data)
         self.update_bttn.setCursor(Qt.PointingHandCursor)
         top_lo.addWidget(QLabel('Количество пользователей в системе:'))
         top_lo.addWidget(self.usr_cnt_value)
+        top_lo.itemAt(top_lo.count()-1).widget().setObjectName('stats-main')
+        top_lo.itemAt(top_lo.count()-2).widget().setObjectName('stats-main')
         top_lo.addStretch()
         top_lo.addWidget(self.update_bttn, alignment=Qt.AlignRight)
         
@@ -922,11 +1047,14 @@ class StatsPage(QWidget):
         movies_top_lo = QHBoxLayout()
         movies_top_lo.addWidget(self.movie_bttns)
         movies_top_lo.addWidget(QLabel('количество фильмов'))
+        movies_top_lo.itemAt(movies_top_lo.count()-1).widget().setObjectName('stats-main-into')
 
         self.favorite_value = QLabel()
         favorite_lo = QVBoxLayout()
         favorite_lo.addWidget(QLabel('добавленных в понравившееся'))
         favorite_lo.addWidget(self.favorite_value)
+        favorite_lo.itemAt(favorite_lo.count()-1).widget().setObjectName('stats-mini')
+        favorite_lo.itemAt(favorite_lo.count()-2).widget().setObjectName('stats-mini')
         favorite_widget = QWidget()
         favorite_widget.setObjectName('stats')
         favorite_widget.setLayout(favorite_lo)
@@ -935,6 +1063,8 @@ class StatsPage(QWidget):
         watchlist_lo = QVBoxLayout()
         watchlist_lo.addWidget(QLabel('добавленных в отложенное'))
         watchlist_lo.addWidget(self.watchlist_value)
+        watchlist_lo.itemAt(watchlist_lo.count()-1).widget().setObjectName('stats-mini')
+        watchlist_lo.itemAt(watchlist_lo.count()-2).widget().setObjectName('stats-mini')
         watchlist_widget = QWidget()
         watchlist_widget.setObjectName('stats')
         watchlist_widget.setLayout(watchlist_lo)
@@ -951,27 +1081,34 @@ class StatsPage(QWidget):
         query_top_lo = QHBoxLayout()
         query_top_lo.addWidget(self.query_bttns)
         query_top_lo.addWidget(QLabel('количество запросов'))
+        query_top_lo.itemAt(query_top_lo.count()-1).widget().setObjectName('stats-main-into')
 
         self.query_month_value = QLabel()
         query_month_lo = QVBoxLayout()
-        query_month_lo.addWidget(QLabel('месяц'))
-        query_month_lo.addWidget(self.query_month_value)
+        query_month_lo.addWidget(QLabel('месяц'), alignment=Qt.AlignTop)
+        query_month_lo.addWidget(self.query_month_value, alignment=Qt.AlignTop)
+        query_month_lo.itemAt(query_month_lo.count()-1).widget().setObjectName('stats-mini')
+        query_month_lo.itemAt(query_month_lo.count()-2).widget().setObjectName('stats-mini')
         query_month_widget = QWidget()
         query_month_widget.setObjectName('stats')
         query_month_widget.setLayout(query_month_lo)
 
         self.query_week_value = QLabel()
         query_week_lo = QVBoxLayout()
-        query_week_lo.addWidget(QLabel('неделя'))
-        query_week_lo.addWidget(self.query_week_value)
+        query_week_lo.addWidget(QLabel('неделя'), alignment=Qt.AlignTop)
+        query_week_lo.addWidget(self.query_week_value, alignment=Qt.AlignTop)
+        query_week_lo.itemAt(query_week_lo.count()-1).widget().setObjectName('stats-mini')
+        query_week_lo.itemAt(query_week_lo.count()-2).widget().setObjectName('stats-mini')
         query_week_widget = QWidget()
         query_week_widget.setObjectName('stats')
         query_week_widget.setLayout(query_week_lo)
 
         self.query_day_value = QLabel()
         query_day_lo = QVBoxLayout()
-        query_day_lo.addWidget(QLabel('день'))
-        query_day_lo.addWidget(self.query_day_value)
+        query_day_lo.addWidget(QLabel('день'), alignment=Qt.AlignTop)
+        query_day_lo.addWidget(self.query_day_value, alignment=Qt.AlignTop)
+        query_day_lo.itemAt(query_day_lo.count()-1).widget().setObjectName('stats-mini')
+        query_day_lo.itemAt(query_day_lo.count()-2).widget().setObjectName('stats-mini')
         query_day_widget = QWidget()
         query_day_widget.setObjectName('stats')
         query_day_widget.setLayout(query_day_lo)
@@ -990,27 +1127,40 @@ class StatsPage(QWidget):
 
         bot_left_lo = QVBoxLayout()
         bot_left_lo.addWidget(movies_widget)
+        bot_left_lo.addSpacing(50)
         bot_left_lo.addWidget(queries_widget)
 
         self.users_genres_value = QLabel()
+        self.users_genres_value.setWordWrap(True)
         users_genres_lo = QVBoxLayout()
-        users_genres_lo.addWidget(QLabel('Жанры'))
-        users_genres_lo.addWidget(self.users_genres_value)
+        users_genres_lo.addWidget(QLabel('Жанры'), alignment=Qt.AlignTop)
+        users_genres_lo.addWidget(self.users_genres_value, alignment=Qt.AlignTop)
+        users_genres_lo.itemAt(users_genres_lo.count()-1).widget().setObjectName('stats-mini')
+        users_genres_lo.itemAt(users_genres_lo.count()-2).widget().setObjectName('stats-mini')
 
         self.users_keywords_value = QLabel()
+        self.users_keywords_value.setWordWrap(True)
         users_keywords_lo = QVBoxLayout()
-        users_keywords_lo.addWidget(QLabel('Ключевые слова'))
-        users_keywords_lo.addWidget(self.users_keywords_value)
+        users_keywords_lo.addWidget(QLabel('Ключевые слова'), alignment=Qt.AlignTop)
+        users_keywords_lo.addWidget(self.users_keywords_value, alignment=Qt.AlignTop)
+        users_keywords_lo.itemAt(users_keywords_lo.count()-1).widget().setObjectName('stats-mini')
+        users_keywords_lo.itemAt(users_keywords_lo.count()-2).widget().setObjectName('stats-mini')
 
         self.users_directors_value = QLabel()
+        self.users_directors_value.setWordWrap(True)
         users_directors_lo = QVBoxLayout()
-        users_directors_lo.addWidget(QLabel('Режиссёры'))
-        users_directors_lo.addWidget(self.users_directors_value)
+        users_directors_lo.addWidget(QLabel('Режиссёры'), alignment=Qt.AlignTop)
+        users_directors_lo.addWidget(self.users_directors_value, alignment=Qt.AlignTop)
+        users_directors_lo.itemAt(users_directors_lo.count()-1).widget().setObjectName('stats-mini')
+        users_directors_lo.itemAt(users_directors_lo.count()-2).widget().setObjectName('stats-mini')
 
         self.users_actors_value = QLabel()
+        self.users_actors_value.setWordWrap(True)
         users_actors_lo = QVBoxLayout()
-        users_actors_lo.addWidget(QLabel('Актёры'))
-        users_actors_lo.addWidget(self.users_actors_value)
+        users_actors_lo.addWidget(QLabel('Актёры'), alignment=Qt.AlignTop)
+        users_actors_lo.addWidget(self.users_actors_value, alignment=Qt.AlignTop)
+        users_actors_lo.itemAt(users_actors_lo.count()-1).widget().setObjectName('stats-mini')
+        users_actors_lo.itemAt(users_actors_lo.count()-2).widget().setObjectName('stats-mini')
 
         users_genres_widget = QWidget()
         users_genres_widget.setObjectName('stats')
@@ -1039,35 +1189,49 @@ class StatsPage(QWidget):
 
         users_filter_lo = QHBoxLayout()
         users_filter_lo.addWidget(QLabel('запросов за'))
-        users_filter_lo.itemAt(users_filter_lo.count()-1).widget().setObjectName('stats')
+        users_filter_lo.itemAt(users_filter_lo.count()-1).widget().setObjectName('stats-main')
         users_filter_lo.addWidget(self.user_bttns)
 
         bot_right_lo = QVBoxLayout()
         bot_right_lo.addWidget(QLabel('Пользовательские предпочтения на основе'), alignment=Qt.AlignTop)
-        bot_right_lo.itemAt(bot_right_lo.count()-1).widget().setObjectName('stats')
+        bot_right_lo.itemAt(bot_right_lo.count()-1).widget().setObjectName('stats-main')
         bot_right_lo.addLayout(users_filter_lo)
         bot_right_lo.addWidget(users_widget, alignment=Qt.AlignTop)
+        bot_right_lo.addStretch()
 
         bot_lo = QHBoxLayout()
         bot_lo.addLayout(bot_left_lo)
+        bot_lo.addSpacing(50)
         bot_lo.addLayout(bot_right_lo)
 
         main_lo = QVBoxLayout()
         main_lo.addLayout(top_lo)
+        main_lo.addStretch(2)
         main_lo.addLayout(bot_lo)
+        main_lo.addStretch(1)
+
         self.setLayout(main_lo)
 
     def __update_data(self):
-        data = data_provider.get_stats()
-        self.usr_cnt = data.get('usr_cnt', 0)
-        self.favorite = data.get('favorite', 0)
-        self.watchlist = data.get('watchlist', 0)
-        self.query_day = data.get('query_day', 0)
-        self.query_week = data.get('query_week', 0)
-        self.query_month = data.get('query_month', 0)
-        self.user_queries_day = data.get('user_queries_day', {})
-        self.user_queries_week = data.get('user_queries_week', {})
-        self.user_queries_month = data.get('user_queries_month', {})
+        self.update_bttn.setEnabled(False)
+        self.update_bttn.updateBackgroundColor()
+        
+        self.worker = StatsWorker(data_provider)
+        self.worker.signals.finished.connect(self.__on_stats_ready)
+        QThreadPool.globalInstance().start(self.worker)
+
+    def __on_stats_ready(self, stats: dict):
+        self.usr_cnt = stats.get('usr_cnt', 0)
+        self.favorite = stats.get('favorite', 0)
+        self.watchlist = stats.get('watchlist', 0)
+        self.query_day = stats.get('query_day', 0)
+        self.query_week = stats.get('query_week', 0)
+        self.query_month = stats.get('query_month', 0)
+        self.user_queries_day = stats.get('user_queries_day', {})
+        self.user_queries_week = stats.get('user_queries_week', {})
+        self.user_queries_month = stats.get('user_queries_month', {})
+        self.update_bttn.setEnabled(True)
+        self.update_bttn.updateBackgroundColor()
         self.set_data()
 
     def set_data(self):
@@ -1098,16 +1262,12 @@ class StatsPage(QWidget):
             case 'day':
                 user_queries = self.user_queries_day
 
-        most_common_params = {}
         for param in ((self.users_genres_value, 'genres'), (self.users_keywords_value, 'keywords'), 
                       (self.users_actors_value, 'actors'), (self.users_directors_value, 'directors')):
-            counter = Counter(user_queries.get(param[1]))
-            most_common_three = counter.most_common(3)
-            most_common_params[param[1]] = [item[0] for item in most_common_three]
-            if not most_common_params[param[1]]:
-                res = 'нет информации'
+            if user_queries.get(param[1]):
+                res = ', '.join(user_queries.get(param[1]))
             else:
-                res = ', '.join(most_common_params[param[1]])
+                res = 'нет информации'
             param[0].setText(res)
 
 class MainWindow(QTabWidget):
@@ -1193,13 +1353,30 @@ class MainWindow(QTabWidget):
             font-weight: bold;
             border-radius: 5%;
         }}
-        QLabel#stats {{
+        QLabel#stats-main {{
             background-color: {color_bg};
             color: {color_text_light};
             font-size: 18pt;
             font-family: Calibri;
             font-weight: bold;
             border: none;
+        }}
+        QLabel#stats-main-into {{
+            background-color: {color_edit};
+            color: {color_text_light};
+            font-size: 18pt;
+            font-family: Calibri;
+            font-weight: bold;
+            border: none;
+        }}
+        QLabel#stats-mini {{
+            background-color: {color_edit};
+            color: {color_text_light};
+            font-size: 15pt;
+            font-family: Calibri;
+            font-weight: bold;
+            border: none;
+            margin: 0;
         }}
         QLabel#param {{
             font-size: 13pt;
@@ -1310,18 +1487,18 @@ class AppWindow(QGraphicsView):
         super().changeEvent(event)
 
 data_provider = DataProvider()
-genres: dict[int, str] = {}
-keywords: dict[int, str] = {}
-directors: dict[int, str] = {}
-actors: dict[int, str] = {}
-countries: dict[str, str] = {}
+# genres: dict[int, str] = {}
+# keywords: dict[int, str] = {}
+# directors: dict[int, str] = {}
+# actors: dict[int, str] = {}
+# countries: dict[str, str] = {}
 
-for param in ('genres', 'keywords', 'directors', 'actors', 'countries'):
-    for row in data_provider.db_request(f'SELECT * FROM {param}'):
-        if param in ('genres', 'keywords', 'countries'):
-            locals()[param][row.get('id')] = row.get('name')
-        else:
-            locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])
+# for param in ('genres', 'keywords', 'directors', 'actors', 'countries'):
+#     for row in data_provider.db_request(f'SELECT * FROM {param}'):
+#         if param in ('genres', 'keywords', 'countries'):
+#             locals()[param][row.get('id')] = row.get('name')
+#         else:
+#             locals()[param][row.get('id')] = ' '.join([row.get('name'), row.get('surname')])
 
 app = QApplication(sys.argv)
 icons = {}

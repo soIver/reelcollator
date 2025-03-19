@@ -123,14 +123,21 @@ class DataProvider:
         return [row['name'] for row in rows]
     
     def get_director_name(self, director_id: int) -> list[str]:
-        query = sql.SQL("SELECT (name || ' ' || surname) as name FROM directors WHERE id = %s")
-        rows = self.db_request(query, params=(director_id,))
-        return rows[0].get('name')
+        if director_id:
+            query = sql.SQL("SELECT (name || ' ' || surname) as name FROM directors WHERE id = %s")
+            rows = self.db_request(query, params=(director_id,))
+            return rows[0].get('name')
     
-    def get_country_name(self, country_id: int) -> list[str]:
-        query = sql.SQL("SELECT name FROM countries WHERE id = %s")
-        rows = self.db_request(query, params=(country_id,))
-        return rows[0].get('name')
+    def get_country_name(self, country_id: int = None, alpha2: str = None) -> list[str]:
+        if country_id:
+            query = sql.SQL("SELECT name FROM countries WHERE id = %s")
+            rows = self.db_request(query, params=(country_id,))
+            return rows[0].get('name')
+        
+        elif alpha2:
+            query = sql.SQL("SELECT id FROM countries WHERE alpha2 = %s")
+            rows = self.db_request(query, params=(alpha2,))
+            return rows[0].get('id')
 
     def get_genre_names(self, genre_ids: list[int]) -> list[str]:
         if not genre_ids:
@@ -211,7 +218,7 @@ class DataProvider:
         return movies
     
     def save_movie(self, movie_data: dict, is_new: bool):
-        if is_new:
+        if not is_new:
             query = sql.SQL('''
                 UPDATE movies 
                 SET name = %s, release_date = %s, release_country = %s, poster_link = %s, 
@@ -235,8 +242,9 @@ class DataProvider:
             movie_data.get('runtime'),
             movie_data.get('director'),
             movie_data.get('overview'),
-            movie_data.get('id')
         ]
+        if not is_new:
+            params.append(movie_data.get('id'))
         self.db_request(query, False, params)
 
         if 'actors_for_delete' in movie_data:
@@ -349,10 +357,10 @@ class DataProvider:
     def update_query(self, user_id, film_name, lower_date, upper_date, film_release_country, director, date, actors, genres, genres_no, keywords, keywords_no):
         params = {
             'user_id': user_id,
-            'film_name': film_name,
+            'movie_name': film_name,
             'lower_date': lower_date,
             'upper_date': upper_date,
-            'film_release_country': film_release_country,
+            'movie_release_country': film_release_country,
             'director': director,
             'date': date
         }
@@ -400,20 +408,94 @@ class DataProvider:
                 VALUES (%s, %s);
             """, get=False, params=(query_id, keyword_id))
             
-    def get_stats(self) -> dict[str, int]:
-        usr_cnt = len(self.db_request(f'SELECT * FROM users'))
-        query_month = len(self.db_request(f"SELECT * FROM queries WHERE date > CURRENT_DATE - '1 month':: interval"))
-        query_week = len(self.db_request(f"SELECT * FROM queries WHERE date > CURRENT_DATE - '1 week':: interval"))
-        query_day = len(self.db_request(f"SELECT * FROM queries WHERE date > CURRENT_DATE - '1 day':: interval"))
-        favorite = len(self.db_request(f"SELECT * FROM favorite_movies"))
-        watchlist = len(self.db_request(f"SELECT * FROM watchlist"))
+    def get_stats(self) -> dict[str, int | dict]:
+        # Основная статистика
+        usr_cnt = len(self.db_request('SELECT * FROM users'))
+        query_month = len(self.db_request("SELECT * FROM queries WHERE date > CURRENT_DATE - '1 month'::interval"))
+        query_week = len(self.db_request("SELECT * FROM queries WHERE date > CURRENT_DATE - '1 week'::interval"))
+        query_day = len(self.db_request("SELECT * FROM queries WHERE date > CURRENT_DATE - '1 day'::interval"))
+        favorite = len(self.db_request("SELECT * FROM favorite_movies"))
+        watchlist = len(self.db_request("SELECT * FROM watchlist"))
 
-        return {'usr_cnt': usr_cnt,
-                'query_month': query_month,
-                'query_week': query_week,
-                'query_day': query_day,
-                'favorite': favorite,
-                'watchlist': watchlist}
+        # Статистика по актёрам, ключевым словам, жанрам и режиссёрам
+        def get_param_stats(table_name: str, interval: str) -> dict[str, int]:
+            """Возвращает статистику по параметрам (актёры, ключевые слова, жанры) за указанный интервал."""
+            query = f"""
+                SELECT {table_name}.name, COUNT(*) as count
+                FROM queries
+                JOIN query_{table_name} ON queries.id = query_{table_name}.query_id
+                JOIN {table_name} ON query_{table_name}.{table_name[:-1]}_id = {table_name}.id
+                WHERE queries.date > CURRENT_DATE - '{interval}'::interval
+                GROUP BY {table_name}.name
+                ORDER BY count DESC
+                LIMIT 3
+            """
+            results = self.db_request(query)
+            return [row['name'] for row in results]
+
+        def get_actor_stats(interval: str) -> dict[str, int]:
+            """Возвращает статистику по актёрам за указанный интервал."""
+            query = f"""
+                SELECT actors.name, actors.surname, COUNT(*) as count
+                FROM queries
+                JOIN query_actors ON queries.id = query_actors.query_id
+                JOIN actors ON query_actors.actor_id = actors.id
+                WHERE queries.date > CURRENT_DATE - '{interval}'::interval
+                GROUP BY actors.name, actors.surname
+                ORDER BY count DESC
+                LIMIT 3
+            """
+            results = self.db_request(query)
+            return [f"{row['name']} {row['surname']}" for row in results]
+
+        def get_director_stats(interval: str) -> dict[str, int]:
+            """Возвращает статистику по режиссёрам за указанный интервал."""
+            query = f"""
+                SELECT directors.name, directors.surname, COUNT(*) as count
+                FROM queries
+                JOIN directors ON queries.director = directors.id
+                WHERE queries.date > CURRENT_DATE - '{interval}'::interval
+                GROUP BY directors.name, directors.surname
+                ORDER BY count DESC
+                LIMIT 3
+            """
+            results = self.db_request(query)
+            return [f"{row['name']} {row['surname']}" for row in results]
+
+        # Сбор статистики за день, неделю и месяц
+        user_queries_day = {
+            'actors': get_actor_stats('1 day'),
+            'keywords': get_param_stats('keywords', '1 day'),
+            'genres': get_param_stats('genres', '1 day'),
+            'directors': get_director_stats('1 day'),
+        }
+
+        user_queries_week = {
+            'actors': get_actor_stats('1 week'),
+            'keywords': get_param_stats('keywords', '1 week'),
+            'genres': get_param_stats('genres', '1 week'),
+            'directors': get_director_stats('1 week'),
+        }
+
+        user_queries_month = {
+            'actors': get_actor_stats('1 month'),
+            'keywords': get_param_stats('keywords', '1 month'),
+            'genres': get_param_stats('genres', '1 month'),
+            'directors': get_director_stats('1 month'),
+        }
+
+        # Возвращаем все данные
+        return {
+            'usr_cnt': usr_cnt,
+            'query_month': query_month,
+            'query_week': query_week,
+            'query_day': query_day,
+            'favorite': favorite,
+            'watchlist': watchlist,
+            'user_queries_day': user_queries_day,
+            'user_queries_week': user_queries_week,
+            'user_queries_month': user_queries_month,
+        }
     
     def get_credits(self, id):
         actors = []
@@ -436,50 +518,93 @@ class DataProvider:
                     break
         return actors, director
     
-    def is_cyrillic(self, text):
-        pattern = re.compile(r'^[а-яА-ЯёЁ\s-]+$')
-        return bool(pattern.match(text))
-    
-    def get_data(self, countries):
-        burl = "https://api.themoviedb.org/3/trending/movie/week?language=ru-RU&page="
-        for i in range(2, 5, 1):
-            url = burl + str(i+1)
-            response = self.session.get(url, headers=headers).json()['results']
-            print(url)
-            for movie in response:
-                id = movie['id']
-                title = movie['title']
-                overview = movie['overview']
-                poster_path = f'https://image.tmdb.org/t/p/original{movie['poster_path']}'
-                genres = movie['genre_ids']
-                release_date = movie['release_date']
-                rating = movie['vote_average']
-                details = self.details(id)
-                revenue = details['revenue']
-                runtime = details['runtime']
-                country_id = details['origin_country'][0]
-                actors = []
-                director = None
-                credits_url = f"https://api.themoviedb.org/3/movie/{id}/credits?language=ru-RU"
-                credits_response = self.session.get(credits_url, headers=headers).json()
-                cast: list = credits_response['cast']
-                crew = credits_response['crew']
-                credits_response = cast + crew
-                for credit in credits_response:
-                    name = credit['name']
-                    if self.is_cyrillic(name):
-                        ns = name.split()
-                        if len(ns) < 2:
-                            continue
-                        if credit['known_for_department'] == 'Acting':
-                            actors.append((credit['id'], ns[0], ns[1]))
-                        elif credit['known_for_department'] == 'Directing':
-                            director = [credit['id'], ns[0], ns[1]]
-                            break
-                if director:
-                    print(id, title, overview, poster_path, genres, release_date, rating, revenue, runtime, country_id, actors, director)
-                    self.db_request(f"INSERT INTO directors VALUES ({director[0]}, '{director[1]}', '{director[2]}')", False)
-                    self.db_request(f"INSERT INTO movies VALUES ({id}, '{title}', '{release_date}', '{countries[country_id]}', '{poster_path}', {rating}, {revenue}, {director[0]}, '{overview}')", False)
-                    for actor in actors:
-                        self.db_request(f"INSERT INTO actors VALUES ({actor[0]}, '{actor[1]}', '{actor[2]}')", False)
-                        self.db_request(f"INSERT INTO movies_actors VALUES ({id}, {actor[0]})", False)
+    def get_personal_recommendations(self, user_id: int) -> list[dict]:
+        preferences_query = """
+            SELECT movie_id FROM movies_scores WHERE user_id = %s
+            UNION
+            SELECT movie_id FROM favorite_movies WHERE user_id = %s;
+        """
+        preferences = self.db_request(preferences_query, params=(user_id, user_id))
+        
+        if not preferences:
+            return []
+
+        features_query = """
+            WITH preferred_features AS (
+                SELECT 
+                    mg.genre_id AS feature_id,
+                    'genre' AS feature_type,
+                    COUNT(*) AS score
+                FROM movies_genres mg
+                WHERE mg.movie_id IN %s
+                GROUP BY mg.genre_id
+                
+                UNION ALL
+                
+                SELECT 
+                    mk.keyword_id AS feature_id,
+                    'keyword' AS feature_type,
+                    COUNT(*) AS score
+                FROM movies_keywords mk 
+                WHERE mk.movie_id IN %s
+                GROUP BY mk.keyword_id
+                
+                UNION ALL
+                
+                SELECT 
+                    ma.actor_id AS feature_id,
+                    'actor' AS feature_type,
+                    COUNT(*) AS score 
+                FROM movies_actors ma
+                WHERE ma.movie_id IN %s
+                GROUP BY ma.actor_id
+            )
+            SELECT feature_id, feature_type
+            FROM preferred_features
+            ORDER BY score DESC
+            LIMIT 10;
+        """
+        movie_ids = tuple([pref['movie_id'] for pref in preferences])
+        top_features = self.db_request(features_query, params=(movie_ids, movie_ids, movie_ids))
+
+        if not top_features:
+            return []
+
+        feature_ids_by_type = {
+            'genre': [],
+            'keyword': [],
+            'actor': []
+        }
+        for feature in top_features:
+            feature_ids_by_type[feature['feature_type']].append(feature['feature_id'])
+
+        movies_query = """
+            SELECT DISTINCT m.*
+            FROM movies m
+            LEFT JOIN movies_genres mg ON mg.movie_id = m.id
+            LEFT JOIN movies_keywords mk ON mk.movie_id = m.id
+            LEFT JOIN movies_actors ma ON ma.movie_id = m.id
+            WHERE 
+                (mg.genre_id IN %s OR %s = FALSE) AND
+                (mk.keyword_id IN %s OR %s = FALSE) AND
+                (ma.actor_id IN %s OR %s = FALSE)
+                AND m.id NOT IN %s
+            ORDER BY m.rating DESC
+            LIMIT 3;
+        """
+        genre_ids = tuple(feature_ids_by_type['genre']) if feature_ids_by_type['genre'] else (0,)
+        keyword_ids = tuple(feature_ids_by_type['keyword']) if feature_ids_by_type['keyword'] else (0,)
+        actor_ids = tuple(feature_ids_by_type['actor']) if feature_ids_by_type['actor'] else (0,)
+        exclude_movie_ids = tuple([pref['movie_id'] for pref in preferences]) if preferences else (0,)
+
+        recommended_movies = self.db_request(
+            movies_query,
+            params=(
+                genre_ids, not feature_ids_by_type['genre'],
+                keyword_ids, not feature_ids_by_type['keyword'],
+                actor_ids, not feature_ids_by_type['actor'],
+                exclude_movie_ids
+            )
+        )
+
+        return recommended_movies
